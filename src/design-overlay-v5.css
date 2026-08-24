@@ -1,0 +1,210 @@
+/* ============================================================
+   LAG harness — 设计系统覆盖层 v5「Forge 熔炉」
+   ------------------------------------------------------------
+   依据：Large Agent Generator.png 图标（深炭黑 #101010 + 琥珀铜橙
+   #d05010~#f09030 渐变）。把产品隐喻为「铸造厂 / 熔炉」——把工作流
+   锻造成可独立运行的智能体。
+   - 基调层：深炭黑（图标底色系，比 v4 更暖更沉）
+   - 交互层：琥珀铜橙（图标主色，替换 v4 的靛紫）——按钮/聚焦/激活/连线
+   - 品牌层：琥珀橙渐变 + 展示衬线（锻造厚重感）
+   - 信息层：冷静青（保留对比，工具调用/标签/状态）
+   - 动效：渐变流动 / 高光扫过 / 余烬微光 / 卡片光边
+   ------------------------------------------------------------
+   实现方式：纯 CSS 覆盖，不动任何 JSX 逻辑。
+   卸载方式：删除 src/main.jsx 里 design-overlay-v5.css 的 import。
+   ============================================================ */
+
+:root {
+  /* --- 基调层：深炭黑（图标 #101010 系，带暖调） --- */
+  --bg-0: #0e0d0c;
+  --bg-1: #141210;
+  --bg-2: #1a1714;
+  --bg-3: #221e19;
+  --bg-4: #2c2720;
+  --bg-5: #383127;
+  --border: #2a241d;
+  --border-2: #3c342a;
+  --border-strong: #574b3a;
+  --text: #f1ede5;
+  --text-2: #b9b1a3;
+  --text-3: #7c7463;
+  --text-4: #4f4a3e;
+
+  /* --- 交互层：琥珀铜橙（图标主色，替换 v4 靛紫） --- */
+  --violet: #e07a2e;
+  --violet-2: #c9642a;
+  --blue: #f09030;
+  --grad: linear-gradient(135deg, #f5a55a 0%, #e07a2e 45%, #c05012 100%);
+  --grad-soft: linear-gradient(135deg, rgba(224, 122, 46, 0.16), rgba(240, 144, 48, 0.08));
+  --focus: 0 0 0 3px rgba(224, 122, 46, 0.30);
+
+  /* --- 品牌层：琥珀铜橙（图标核心） --- */
+  --brand: #e07a2e;
+  --brand-2: #b03a08;
+  --brand-grad: linear-gradient(135deg, #f5a55a 0%, #d05010 55%, #a83a08 100%);
+  --brand-glow: 0 4px 18px rgba(224, 122, 46, 0.36);
+  --brand-glow-strong: 0 6px 28px rgba(224, 122, 46, 0.52);
+  --brand-text-grad: linear-gradient(90deg, #fff8f0 0%, #f3c99d 100%);
+
+  /* --- 信息层：冷静青（保留对比） --- */
+  --cyan: #3fd0c9;
+  --cyan-2: #2ab3ab;
+
+  /* --- 语义文本色 --- */
+  --danger-text: #ffa49d;
+  --success-text: #86e79a;
+  --warning-text: #ffd28f;
+
+  /* --- 氛围层：琥珀余烬微晕 --- */
+  --aura-violet: rgba(224, 122, 46, 0.08);
+  --aura-purple: rgba(224, 122, 46, 0.05);
+  --aura-brand: rgba(224, 122, 46, 0.07);
+
+  /* --- 展示衬线（锻造厚重感，系统字零下载） --- */
+  --font-display: Constantia, Georgia, "Palatino Linotype", "Times New Roman", serif;
+
+  /* --- 缓动 --- */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.42, 1);
+}
+
+/* ================= 品牌标题：衬线 + 琥珀渐变 ================= */
+.logo-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  background: var(--brand-text-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 600;
+}
+.logo-sub {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* ================= Logo 图片（图标 PNG） ================= */
+.logo-badge {
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(224, 122, 46, 0.25) inset,
+              0 4px 18px rgba(224, 122, 46, 0.35);
+  background: #101010;
+}
+.logo-badge::before,
+.logo-badge::after {
+  content: none !important; /* 移除旧 emoji/装饰伪元素，改用 PNG 图标 */
+}
+.logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+/* 余烬呼吸：logo 光晕缓慢明暗 */
+@keyframes forge-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(224, 122, 46, 0.25) inset, 0 4px 18px rgba(224, 122, 46, 0.35); }
+  50% { box-shadow: 0 0 0 1px rgba(240, 144, 48, 0.45) inset, 0 4px 26px rgba(224, 122, 46, 0.55); }
+}
+.logo-badge { animation: forge-breathe 4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .logo-badge { animation: none; }
+}
+
+/* ================= 侧栏导航：琥珀激活指示条 ================= */
+.nav-item {
+  position: relative;
+  border-radius: 9px;
+  color: var(--text-2);
+  transition: background 0.18s var(--ease-out), color 0.18s var(--ease-out), transform 0.18s var(--ease-out);
+}
+.nav-item:hover {
+  background: var(--bg-3);
+  color: var(--text);
+  transform: translateX(2px);
+}
+.nav-item.active {
+  background: var(--grad-soft);
+  color: var(--text);
+}
+/* 激活项左侧：琥珀渐变指示条（滑入） */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0.3);
+  width: 3px;
+  height: 60%;
+  border-radius: 2px;
+  background: var(--grad);
+  box-shadow: 0 0 10px rgba(224, 122, 46, 0.6);
+  animation: nav-bar-in 0.28s var(--ease-spring) forwards;
+}
+@keyframes nav-bar-in {
+  to { transform: translateY(-50%) scaleY(1); }
+}
+.nav-icon svg { stroke: currentColor; }
+
+/* ================= 按钮：琥珀渐变流动 + 高光扫过 ================= */
+.btn.primary,
+.btn.send {
+  background-image: var(--grad);
+  background-size: 180% 100%;
+  background-position: 0% 50%;
+  color: #fff;
+  transition: background-position 0.4s var(--ease-out), transform 0.15s var(--ease-out), box-shadow 0.2s var(--ease-out);
+  position: relative;
+  overflow: hidden;
+}
+.btn.primary:hover,
+.btn.send:hover {
+  background-position: 90% 50%;
+  transform: translateY(-1px);
+  box-shadow: var(--brand-glow);
+}
+.btn.primary:active,
+.btn.send:active {
+  transform: translateY(0);
+}
+
+/* ================= 卡片：琥珀光边（hover） ================= */
+.skill-card,
+.agent-card,
+.mcp-card {
+  transition: transform 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
+}
+.skill-card:hover,
+.agent-card:hover,
+.mcp-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(224, 122, 46, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(224, 122, 46, 0.15);
+}
+
+/* ================= 输入框 focus：琥珀环 ================= */
+.input:focus,
+.wf-textarea:focus,
+.wf-name-input:focus,
+.code-input:focus {
+  border-color: rgba(224, 122, 46, 0.6);
+  box-shadow: 0 0 0 3px rgba(224, 122, 46, 0.16);
+}
+
+/* ================= 滚动条：琥珀色调 ================= */
+::-webkit-scrollbar-thumb { background: #3c342a; }
+::-webkit-scrollbar-thumb:hover { background: #574b3a; }
+
+/* ================= 空状态图标：琥珀余烬光 ================= */
+.empty-icon {
+  animation: forge-breathe 4s ease-in-out infinite;
+}
+
+/* ================= 主内容区氛围：暖炭 + 琥珀余烬晕 ================= */
+.main::before {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(224, 122, 46, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(192, 80, 18, 0.05), transparent 55%);
+}

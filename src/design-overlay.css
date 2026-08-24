@@ -1,0 +1,773 @@
+/* ============================================================
+   LAG harness — 设计系统覆盖层 v6 ·「Neko Forge 猫铸造厂」
+   ------------------------------------------------------------
+   美学方向：工业锻造的厚重力量 × 猫的温暖俏皮。
+   像一只橘白相间的橘猫安坐在熔铁炉上 — 危险又可爱。
+   ------------------------------------------------------------
+   品牌基因（src/assets/logo.png 已含 LAG + 猫剪影）：
+   - 基调：暖炭黑（锻造炉内壁的深棕黑，非冷蓝）
+   - 交互：琥珀铜橙（猫毛 × 熔铁温度） #f5a55a → #d05010
+   - 信息：冷静青（锻造淬火的水色）
+   - 点缀：奶油粉（猫肉垫）
+   动效：余烬呼吸、高光扫过、肉垫光边、锻造落锤回弹
+   ------------------------------------------------------------
+   实现方式：纯 CSS 覆盖，不动任何 JSX 逻辑与原有 styles.css。
+   卸载：删除 main.jsx 中 design-overlay.css 的 import 即可还原。
+   ============================================================ */
+
+:root {
+  /* ============== 基调：暖炭黑（锻造炉的深棕黑） ============== */
+  --bg-0: #0e0c0a;
+  --bg-1: #151210;
+  --bg-2: #1c1814;
+  --bg-3: #251f19;
+  --bg-4: #2f271f;
+  --bg-5: #3b3127;
+  --border: #2a231b;
+  --border-2: #3a3127;
+  --border-strong: #5a4a38;
+  --text: #f3ede2;
+  --text-2: #b9ae9c;
+  --text-3: #7c7060;
+  --text-4: #50483a;
+
+  /* ============== 交互层：琥珀铜橙（LAG 猫毛主色） ============== */
+  --amber: #f5a55a;
+  --amber-2: #e07a2e;
+  --ember: #c05012;
+  --violet: #e07a2e;      /* 兼容旧变量名 */
+  --violet-2: #c9642a;    /* 兼容旧变量名 */
+  --blue: #f5a55a;        /* 兼容旧变量名 */
+  --grad: linear-gradient(135deg, #ffb86e 0%, #e07a2e 42%, #b03a08 100%);
+  --grad-soft: linear-gradient(135deg, rgba(224, 122, 46, 0.18), rgba(240, 144, 48, 0.06));
+  --focus: 0 0 0 3px rgba(224, 122, 46, 0.30);
+
+  /* ============== 品牌层：琥珀铜橙 + 展示衬线 ============== */
+  --brand: #e07a2e;
+  --brand-2: #a83a08;
+  --brand-grad: linear-gradient(135deg, #ffc37a 0%, #d05010 55%, #8a2d05 100%);
+  --brand-glow: 0 4px 20px rgba(224, 122, 46, 0.42);
+  --brand-glow-strong: 0 8px 32px rgba(224, 122, 46, 0.60);
+  --brand-text-grad: linear-gradient(90deg, #fff8ee 0%, #f3c99d 45%, #e0a066 100%);
+
+  /* 奶油肉垫粉（点缀 hover/小图标，克制使用） */
+  --paw: #f9b2a0;
+  --paw-soft: rgba(249, 178, 160, 0.14);
+
+  /* ============== 信息层：冷静青（锻造淬火） ============== */
+  --cyan: #4dd0c2;
+  --cyan-2: #2cb3a6;
+
+  /* ============== 语义色 ============== */
+  --danger-text: #ffa69d;
+  --danger: #ff7566;
+  --danger-bg: rgba(255, 117, 102, 0.12);
+  --success-text: #89e9a0;
+  --warning-text: #ffd38f;
+
+  /* ============== 字体 ==============
+     展示衬线：Constantia/Georgia（锻造厚重、奢侈品感，系统字零下载）
+     正文：Segoe UI Variable / PingFang（现代、可读）
+     等宽：Cascadia Code（工程专业感） */
+  --font-display: Constantia, Georgia, "Palatino Linotype", "Times New Roman", serif;
+  --font: "Segoe UI Variable Text", "Segoe UI", -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  /* ============== 度量 ============== */
+  --radius-s: 6px;
+  --radius-m: 9px;
+  --radius-l: 13px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* ============== 缓动 ============== */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.42, 1);   /* 锻造回弹 */
+  --ease-hammer: cubic-bezier(0.4, 0, 0.2, 1.2);      /* 落锤后弹 */
+
+  /* ============== 阴影 ============== */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 28px 72px rgba(0, 0, 0, 0.65);
+
+  /* ============== 氛围层：余烬微晕 ============== */
+  --aura-amber: rgba(224, 122, 46, 0.085);
+  --aura-ember: rgba(176, 58, 8, 0.055);
+  --aura-forge: radial-gradient(1200px 620px at 15% -10%, var(--aura-amber), transparent 62%),
+                radial-gradient(900px 520px at 100% 6%, var(--aura-ember), transparent 55%),
+                radial-gradient(800px 460px at 50% 120%, rgba(77, 208, 194, 0.04), transparent 55%);
+}
+
+/* ============================================================
+   0. 全局字体与基础覆盖
+   ============================================================ */
+body { font-family: var(--font); }
+h1, h2, h3, .panel-header h2, .logo-title, .chat-empty h2, .empty-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.005em;
+}
+code, pre, .msg-meta, .session-meta, .trace-status, .nav-count { font-family: var(--mono); }
+
+/* ============================================================
+   1. 主内容区：暖炭纵深 + 余烬微光漂移
+   ============================================================ */
+.main {
+  position: relative;
+  z-index: 0;
+  background: var(--bg-0);
+}
+.main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--aura-forge);
+  animation: ember-drift 28s var(--ease-out) infinite alternate;
+}
+@keyframes ember-drift {
+  from { opacity: 0.68; transform: translate3d(0, 0, 0); }
+  to   { opacity: 1;    transform: translate3d(-22px, 14px, 0); }
+}
+.app.has-wallpaper .main::before { opacity: 0; }
+
+/* 聊天区顶部：淬火前的暖色光晕 */
+.chat-scroll {
+  background:
+    radial-gradient(720px 280px at 50% 0%, rgba(224, 122, 46, 0.075), transparent 70%),
+    transparent;
+}
+
+/* 画布点阵：铜橙色微粒（锻造炉的铁粉颗粒） */
+.wf-canvas {
+  background-image:
+    radial-gradient(circle, rgba(240, 144, 48, 0.10) 1px, transparent 1px),
+    radial-gradient(circle, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 26px 26px, 26px 26px;
+  background-color: var(--bg-1);
+}
+
+/* 顶部导航栏：毛玻璃暖炭层 */
+.topbar {
+  backdrop-filter: blur(16px) saturate(1.18);
+  -webkit-backdrop-filter: blur(16px) saturate(1.18);
+  box-shadow: 0 1px 0 rgba(224, 122, 46, 0.08);
+}
+
+/* ============================================================
+   2. Sidebar Logo：LAG 图标 PNG + 余烬呼吸光晕
+   ============================================================ */
+/* Logo 徽章：保留 logo.png（已经是 LAG 字母 + 猫剪影），
+   只加铜橙外边框、内高光、余烬呼吸动画。绝不覆盖成 emoji。 */
+.logo-badge {
+  position: relative;
+  overflow: hidden;
+  background: #0e0c0a;
+  box-shadow:
+    0 0 0 1px rgba(224, 122, 46, 0.28) inset,
+    0 4px 18px rgba(224, 122, 46, 0.40);
+  animation: forge-breathe 4.2s ease-in-out infinite;
+}
+/* 移除任何 emoji 伪元素覆盖（旧版本覆盖层残留） */
+.logo-badge::before,
+.logo-badge::after {
+  content: none !important;
+}
+.logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+@keyframes forge-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(224, 122, 46, 0.28) inset, 0 4px 18px rgba(224, 122, 46, 0.38); }
+  50%      { box-shadow: 0 0 0 1px rgba(255, 196, 120, 0.48) inset, 0 6px 30px rgba(224, 122, 46, 0.60); }
+}
+
+/* Logo 标题：衬线 + 琥珀渐变（锻造铭牌感） */
+.logo-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--brand-text-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+/* Logo 副标题："Agent Forge" → "Neko Forge"（文本替换，不改 JSX） */
+.logo-sub {
+  font-size: 9.5px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  position: relative;
+  display: inline-block;
+}
+.logo-sub::before {
+  content: "Neko Forge";
+  position: absolute;
+  inset: 0;
+  background: var(--bg-1);
+  color: var(--amber);
+  padding-right: 4px;
+}
+
+/* ============================================================
+   3. 侧栏导航：琥珀激活指示条 + 猫爪滑入
+   ============================================================ */
+.sidebar {
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 100%);
+  border-right: 1px solid var(--border);
+}
+.nav-item {
+  position: relative;
+  border-radius: 9px;
+  color: var(--text-2);
+  transition: background 0.18s var(--ease-out),
+              color 0.18s var(--ease-out),
+              transform 0.18s var(--ease-out);
+}
+.nav-item:hover {
+  background: var(--bg-3);
+  color: var(--text);
+  transform: translateX(2px);
+}
+.nav-item.active {
+  background: var(--grad-soft);
+  color: var(--text);
+}
+/* 激活项：铜橙渐变指示条（锻造回弹滑入） */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%) scaleY(0.2);
+  width: 3px;
+  height: 60%;
+  border-radius: 2px;
+  background: var(--grad);
+  box-shadow: 0 0 12px rgba(224, 122, 46, 0.65);
+  animation: paw-in 0.28s var(--ease-spring) forwards;
+}
+@keyframes paw-in {
+  to { transform: translateY(-50%) scaleY(1); }
+}
+.nav-item.active .nav-icon { color: var(--amber); }
+
+/* 会话激活态：同色系统一 */
+.session-item { position: relative; }
+.session-item.active {
+  background: var(--grad-soft);
+  border-color: rgba(224, 122, 46, 0.34);
+}
+.session-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--grad);
+  box-shadow: 0 0 8px rgba(224, 122, 46, 0.5);
+  animation: paw-in 0.24s var(--ease-spring) forwards;
+}
+
+/* 计数徽章 / Spinner */
+.nav-count {
+  background: var(--bg-4);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.nav-spinner,
+.wf-spinner {
+  border-color: rgba(224, 122, 46, 0.28);
+  border-top-color: var(--amber);
+}
+
+/* ============================================================
+   4. 空状态：🐱 猫咪抱锤锻造 + 余烬漂浮
+   ============================================================ */
+.chat-empty h2 {
+  background: var(--brand-text-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-family: var(--font-display);
+}
+
+/* 聊天空状态大图标：橘猫蹲坐 + 浮动 + 余烬呼吸 */
+.empty-logo {
+  position: relative;
+  font-size: 0;          /* 隐藏原始 ⚡ emoji */
+  background: var(--brand-grad);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 14px 44px rgba(224, 122, 46, 0.45);
+  animation:
+    forge-float 4.6s ease-in-out infinite,
+    forge-breathe-strong 4.2s ease-in-out 0.6s infinite;
+}
+.empty-logo::before {
+  content: "🐱";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 38px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
+}
+@keyframes forge-float {
+  0%, 100% { transform: translateY(0) rotate(-0.6deg); }
+  50%      { transform: translateY(-9px) rotate(0.6deg); }
+}
+@keyframes forge-breathe-strong {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14) inset,
+                0 14px 44px rgba(224, 122, 46, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(255, 220, 170, 0.22) inset,
+                0 20px 60px rgba(224, 122, 46, 0.70);
+  }
+}
+
+/* 其他面板空状态图标：统一替换成猫咪化 emoji */
+.empty-icon {
+  position: relative;
+  font-size: 0;          /* 隐藏原始 emoji */
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  overflow: hidden;
+  animation: forge-breathe-light 4s ease-in-out infinite;
+}
+.empty-icon::before {
+  content: "🐱";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+}
+/* 根据父面板用父选择器（属性不可用），
+   我们用上下文类名：各 Panel 组件 empty-icon 的 emoji 被隐藏，
+   一律显示同一只主题猫（由上面统一 ::before 提供）。
+   但为了区分面板，我们用 CSS 无法读取父类名，所以采用：
+   默认显示 🐱，外加后缀区分 —— 接受一致的视觉语言。 */
+@keyframes forge-breathe-light {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(224, 122, 46, 0.10) inset; }
+  50%      { box-shadow: 0 0 0 1px rgba(224, 122, 46, 0.24) inset,
+                         0 6px 22px rgba(224, 122, 46, 0.22); }
+}
+
+/* 智能体 chip：hover 肉垫粉光边（猫元素点缀） */
+.agent-chip {
+  transition: transform 0.15s var(--ease-spring),
+              border-color 0.15s var(--ease-out),
+              box-shadow 0.18s var(--ease-out);
+}
+.agent-chip:hover {
+  border-color: var(--amber);
+  transform: translateY(-2px);
+  box-shadow:
+    0 6px 20px rgba(224, 122, 46, 0.22),
+    0 0 0 1px var(--paw-soft) inset;
+}
+.agent-chip.wf:hover {
+  border-color: var(--cyan);
+  box-shadow:
+    0 6px 20px rgba(77, 208, 194, 0.20),
+    0 0 0 1px rgba(77, 208, 194, 0.08) inset;
+}
+
+/* ============================================================
+   5. 按钮：铜橙渐变流动 + 高光扫过（锻造回火）
+   ============================================================ */
+.btn {
+  user-select: none;
+  transition:
+    background 0.16s var(--ease-out),
+    border-color 0.16s var(--ease-out),
+    box-shadow 0.18s var(--ease-out),
+    filter 0.16s var(--ease-out),
+    transform 0.1s var(--ease-hammer);
+}
+.btn:disabled,
+.btn.disabled { opacity: 0.45; pointer-events: none; }
+.btn:focus-visible { box-shadow: var(--focus); }
+.btn:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.95); }
+
+/* 主按钮 / 发送：铜橙渐变流动 + 高光扫过 */
+.btn.primary,
+.btn.send {
+  position: relative;
+  overflow: hidden;
+  background-image: var(--grad);
+  background-size: 180% 100%;
+  background-position: 0% 50%;
+  color: #fff;
+  transition:
+    background-position 0.45s var(--ease-out),
+    transform 0.15s var(--ease-out),
+    box-shadow 0.2s var(--ease-out),
+    filter 0.16s var(--ease-out);
+}
+.btn.primary {
+  box-shadow:
+    0 2px 12px rgba(224, 122, 46, 0.36),
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+}
+.btn.primary:hover,
+.btn.send:hover {
+  background-position: 92% 50%;
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    0 6px 22px rgba(224, 122, 46, 0.50),
+    0 0 0 1px rgba(255, 255, 255, 0.09) inset;
+}
+
+/* 高光扫过（锻造闪火花） */
+.btn.primary::after,
+.btn.send::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 42%;
+  background: linear-gradient(100deg, transparent, rgba(255, 236, 205, 0.35), transparent);
+  transform: skewX(-18deg) translateX(0);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.6s var(--ease-out), opacity 0.18s ease;
+}
+.btn.primary:hover::after,
+.btn.send:hover::after {
+  opacity: 1;
+  transform: skewX(-18deg) translateX(400%);
+}
+
+/* 发送按钮：胶囊 */
+.btn.send {
+  border-radius: var(--radius-pill);
+  padding: 8px 28px;
+  box-shadow:
+    0 2px 14px rgba(224, 122, 46, 0.40),
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+}
+
+/* 危险 / 停止按钮：语义色 */
+.btn.danger {
+  background: transparent;
+  border-color: rgba(255, 117, 102, 0.48);
+  color: var(--danger-text);
+}
+.btn.danger:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: #ffbfb9;
+}
+.btn.danger:active { background: rgba(255, 117, 102, 0.18); }
+.btn.danger:focus-visible { box-shadow: 0 0 0 3px rgba(255, 117, 102, 0.22); }
+
+.btn.stop {
+  color: var(--danger-text);
+  border-color: rgba(255, 117, 102, 0.5);
+}
+.btn.stop:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: #ffbfb9;
+}
+
+.icon-btn { transition-timing-function: var(--ease-out); }
+.icon-btn:focus-visible { box-shadow: var(--focus); }
+
+/* ============================================================
+   6. 对话流：AI 冷炭抬升气泡 / 用户铜橙暖气泡 / 淬火青工具条
+   ============================================================ */
+.msg-bubble {
+  line-height: 1.78;
+  animation: bubble-hammer 0.24s var(--ease-spring) both;
+}
+@keyframes bubble-hammer {
+  from { opacity: 0; transform: translateY(5px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* AI 气泡：冷炭抬升表面 */
+.msg-bubble.ai {
+  background: linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%);
+  border: 1px solid rgba(224, 122, 46, 0.14);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+}
+/* 用户气泡：铜橙暖渐变（猫毛色调） */
+.msg-bubble.user {
+  background: linear-gradient(135deg, rgba(255, 196, 120, 0.28), rgba(208, 80, 16, 0.22));
+  border: 1px solid rgba(240, 144, 48, 0.50);
+}
+
+/* 头像：铜橙光晕 + 余烬阴影 */
+.msg-avatar {
+  border-radius: var(--radius-m);
+  box-shadow:
+    0 0 0 1px rgba(224, 122, 46, 0.22) inset,
+    0 3px 12px rgba(224, 122, 46, 0.38);
+}
+
+/* 工具调用：左侧淬火青状态条 + 呼吸脉冲 */
+.tool-call {
+  position: relative;
+  border-left: 3px solid var(--cyan);
+  border-radius: var(--radius-m);
+  background: rgba(77, 208, 194, 0.065);
+  animation: quench-pulse 3.2s var(--ease-out) infinite;
+}
+@keyframes quench-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(77, 208, 194, 0); }
+  50%      { box-shadow: 0 0 14px 0 rgba(77, 208, 194, 0.14); }
+}
+/* 思考痕迹代码名：铜橙软底 */
+.trace-head code {
+  background: rgba(224, 122, 46, 0.13);
+  color: #ffd7a8;
+}
+.trace-status.done { color: var(--success-text); }
+.trace-status.error,
+.trace-error { color: var(--danger-text); }
+.trace-status.aborted { color: var(--warning-text); }
+
+/* 块引用：铜橙淡边 */
+.markdown-body blockquote {
+  background: rgba(224, 122, 46, 0.065);
+  border-left-color: rgba(224, 122, 46, 0.45);
+}
+
+/* ============================================================
+   7. 卡片：铜橙光边 hover + 锻造回弹抬升
+   ============================================================ */
+.skill-card,
+.agent-card,
+.mcp-card,
+.mem-card {
+  transition:
+    transform 0.2s var(--ease-spring),
+    box-shadow 0.22s var(--ease-out),
+    border-color 0.2s var(--ease-out);
+}
+.skill-card:hover,
+.agent-card:hover,
+.mcp-card:hover,
+.mem-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(224, 122, 46, 0.42);
+  box-shadow:
+    0 10px 32px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(249, 178, 160, 0.08) inset;  /* 肉垫内光 */
+}
+.agent-code { background: rgba(224, 122, 46, 0.13); }
+.chip.active {
+  background: rgba(224, 122, 46, 0.17);
+  color: var(--text);
+  border-color: rgba(224, 122, 46, 0.45);
+}
+
+/* ============================================================
+   8. 面板入场 / 弹窗：锻造回弹
+   ============================================================ */
+.panel {
+  animation: panel-hammer 0.32s var(--ease-spring) both;
+}
+@keyframes panel-hammer {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.modal {
+  border-color: rgba(224, 122, 46, 0.24);
+  box-shadow:
+    var(--shadow-3),
+    0 0 0 1px rgba(224, 122, 46, 0.06);
+  animation: modal-hammer 0.24s var(--ease-spring) both;
+}
+@keyframes modal-hammer {
+  from { opacity: 0; transform: translateY(7px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-header {
+  background: linear-gradient(180deg, var(--bg-3) 0%, transparent 100%);
+}
+
+/* ============================================================
+   9. 输入框：铜橙聚焦环
+   ============================================================ */
+:root {
+  --radius-pill: 999px;
+}
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: var(--radius-s);
+}
+.input:focus,
+.wf-textarea:focus,
+.wf-name-input:focus,
+.code-input:focus {
+  border-color: rgba(224, 122, 46, 0.65);
+  box-shadow: 0 0 0 3px rgba(224, 122, 46, 0.18);
+}
+.composer-box {
+  border-radius: var(--radius-l);
+  transition:
+    border-color 0.18s var(--ease-out),
+    box-shadow 0.22s var(--ease-out);
+}
+.composer-box:focus-within {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 3px rgba(224, 122, 46, 0.18);
+}
+
+/* 圆角统一 */
+.composer-box { border-radius: var(--radius-l); }
+.msg-avatar { border-radius: var(--radius-m); }
+.toast { border-radius: var(--radius-l); }
+.wf-del { border-radius: var(--radius-s); }
+
+/* ============================================================
+   10. 工作流画布：铜橙交互层
+   ============================================================ */
+.wf-node.selected {
+  box-shadow:
+    0 0 0 1px var(--amber),
+    0 0 18px rgba(224, 122, 46, 0.45);
+}
+.wf-edge-g.selected .wf-edge {
+  filter: drop-shadow(0 0 4px rgba(224, 122, 46, 0.72));
+}
+.wf-marquee {
+  border: 1px dashed var(--amber);
+  background: rgba(224, 122, 46, 0.13);
+}
+.wf-minimap-viewport {
+  fill: rgba(224, 122, 46, 0.14);
+}
+.wf-port.top {
+  box-shadow:
+    0 0 0 1px rgba(224, 122, 46, 0.58),
+    0 0 6px rgba(224, 122, 46, 0.48);
+}
+.wf-port.top:hover {
+  box-shadow:
+    0 0 0 1px var(--amber),
+    0 0 12px rgba(224, 122, 46, 0.72);
+}
+
+/* 记忆画布节点 / 协议启用态 */
+.mem-canvas-node.link-src {
+  box-shadow: 0 0 0 1px var(--amber), 0 0 14px rgba(224, 122, 46, 0.4);
+}
+.mem-proto-btn.on {
+  background: var(--grad-soft);
+  border-color: rgba(224, 122, 46, 0.52);
+  color: var(--amber);
+}
+
+/* 团队对话 AI 消息 */
+.team-msg-ai {
+  background: rgba(224, 122, 46, 0.15);
+  border-color: rgba(224, 122, 46, 0.40);
+}
+
+/* ============================================================
+   11. 细节：滚动条 / 选区 / Toast
+   ============================================================ */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb {
+  background: var(--bg-5);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-pill);
+  transition: background 0.16s var(--ease-out);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+::selection { background: rgba(224, 122, 46, 0.38); }
+
+.toast {
+  pointer-events: none;
+  border-radius: var(--radius-l);
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  box-shadow: var(--shadow-2);
+}
+.toast-error   { border-color: rgba(255, 117, 102, 0.52); color: var(--danger-text); }
+.toast-success { border-color: rgba(137, 233, 160, 0.45); color: var(--success-text); }
+.toast-info    { border-color: rgba(224, 122, 46, 0.42); color: var(--warning-text); }
+
+/* ============================================================
+   12. 排版层级微调
+   ============================================================ */
+body { letter-spacing: 0.008em; }
+.panel-header h2 {
+  letter-spacing: -0.3px;
+  font-weight: 700;
+}
+.composer-input { line-height: 1.68; }
+.session-list-header,
+.empty-section-title {
+  letter-spacing: 0.14em;
+  color: var(--text-3);
+  font-weight: 700;
+}
+.msg-meta,
+.trace-status { font-size: 10.5px; }
+
+/* 标题渐入（仅首次渲染，不重排） */
+.skill-card-title,
+.agent-name {
+  font-weight: 700;
+  letter-spacing: 0.005em;
+}
+
+/* ============================================================
+   13. 动态偏好：尊重 reduced-motion
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .icon-btn,
+  .nav-item,
+  .session-item,
+  .chip,
+  .skill-card,
+  .agent-card,
+  .mcp-card,
+  .mem-card,
+  .msg-bubble,
+  .tool-call,
+  .modal,
+  .panel,
+  .logo-badge,
+  .empty-logo,
+  .empty-icon,
+  .main::before {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .btn.primary::after,
+  .btn.send::after { display: none; }
+}

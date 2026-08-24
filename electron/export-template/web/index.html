@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>__NAME__</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+         background: #12141a; color: #e5e7eb; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 12px 20px; border-bottom: 1px solid #262a35; font-size: 15px; font-weight: 600;
+           display: flex; align-items: center; gap: 10px; }
+  header small { color: #8b90a0; font-weight: 400; }
+  header .spacer { flex: 1; }
+  #cfgOpen { background: transparent; border: 1px solid #343a4a; color: #8b90a0; font-size: 15px;
+             width: 34px; height: 30px; border-radius: 8px; cursor: pointer; }
+  #cfgOpen:hover { color: #e5e7eb; border-color: #4b3fe3; }
+  #chat { flex: 1; display: none; flex-direction: column; min-height: 0; }
+  #msgs { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 78%; padding: 10px 14px; border-radius: 10px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .user { align-self: flex-end; background: #3b2fd6; }
+  .bot { align-self: flex-start; background: #1f2430; }
+  .err { align-self: flex-start; background: #4a1d1d; color: #ffb4b4; }
+  .hint { align-self: center; color: #8b90a0; font-size: 13px; }
+  footer { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid #262a35; }
+  input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #343a4a;
+          background: #1a1e29; color: #e5e7eb; font-size: 14px; outline: none; }
+  button { padding: 10px 20px; border-radius: 8px; border: 0; background: #4b3fe3;
+           color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid #343a4a; color: #8b90a0; }
+  #cfg { flex: 1; display: none; align-items: center; justify-content: center; overflow-y: auto; padding: 20px; }
+  .cfg-card { width: 100%; max-width: 420px; background: #1a1e29; border: 1px solid #262a35;
+              border-radius: 14px; padding: 26px 24px; }
+  .cfg-card h3 { font-size: 17px; margin-bottom: 6px; }
+  .cfg-hint { color: #8b90a0; font-size: 12.5px; line-height: 1.7; margin-bottom: 18px; }
+  .cfg-hint code { color: #9aa7c9; font-family: ui-monospace, Consolas, monospace; }
+  .cfg-field { display: block; margin-bottom: 13px; }
+  .cfg-field span { display: block; font-size: 12px; color: #8b90a0; margin-bottom: 5px; }
+  .cfg-field input { width: 100%; }
+  .cfg-actions { display: flex; gap: 10px; margin-top: 20px; }
+  .cfg-actions button { flex: 1; }
+  .cfg-done { color: #4ade80; font-size: 13px; margin-top: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>__NAME__<small>__DESC__</small><span class="spacer"></span><button id="cfgOpen" title="LLM 配置">⚙</button></header>
+
+<div id="cfg">
+  <div class="cfg-card">
+    <h3>配置 LLM 后开始对话</h3>
+    <p class="cfg-hint">这是首次运行设置。配置将保存在本机 <code>data/config.json</code>，不会外传。
+      也可通过环境变量 <code>LLM_BASE_URL / LLM_API_KEY / LLM_MODEL</code> 提供。</p>
+    <label class="cfg-field"><span>Base URL</span>
+      <input id="cfgUrl" placeholder="https://api.deepseek.com/v1" spellcheck="false" /></label>
+    <label class="cfg-field"><span>API Key</span>
+      <input id="cfgKey" type="password" placeholder="sk-..." spellcheck="false" /></label>
+    <label class="cfg-field"><span>模型</span>
+      <input id="cfgModel" placeholder="deepseek-v4-flash" spellcheck="false" /></label>
+    <div class="cfg-actions">
+      <button id="cfgCancel" class="ghost">取消</button>
+      <button id="cfgSave">保存并开始对话</button>
+    </div>
+    <div class="cfg-done" id="cfgDone">✓ 已保存</div>
+  </div>
+</div>
+
+<div id="chat">
+  <div id="msgs"><div class="hint">你好，我是 __NAME__，请输入你的问题。</div></div>
+  <footer>
+    <input id="inp" placeholder="输入消息…" />
+    <button id="send">发送</button>
+  </footer>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s)
+const msgs = $('#msgs')
+const TOKEN = '__TOKEN__' // 本地访问令牌（生成时嵌入），跨机调用需携带
+function authHeaders(extra) {
+  const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {})
+  if (TOKEN && TOKEN !== '__TOKEN__') h['Authorization'] = 'Bearer ' + TOKEN
+  return h
+}
+function add(cls, text) {
+  const d = document.createElement('div')
+  d.className = 'msg ' + cls
+  d.textContent = text
+  msgs.appendChild(d)
+  msgs.scrollTop = msgs.scrollHeight
+  return d
+}
+async function loadConfig() {
+  try {
+    const res = await fetch('/v1/config')
+    const data = await res.json()
+    const cfgOk = data.configured
+    $('#cfg').style.display = cfgOk ? 'none' : 'flex'
+    $('#chat').style.display = cfgOk ? 'flex' : 'none'
+    $('#cfgUrl').value = data.baseUrl || ''
+    $('#cfgModel').value = data.model || ''
+    $('#cfgKey').value = ''
+    $('#cfgKey').placeholder = data.hasKey ? '已保存（留空保持不变）' : 'sk-...'
+    $('#cfgCancel').style.display = cfgOk ? 'block' : 'none'
+    if (cfgOk) $('#inp').focus()
+  } catch (e) {
+    add('err', '无法连接服务: ' + String(e.message || e))
+  }
+}
+async function saveConfig() {
+  const btn = $('#cfgSave')
+  btn.disabled = true
+  try {
+    const res = await fetch('/v1/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base_url: $('#cfgUrl').value.trim(),
+        api_key: $('#cfgKey').value.trim(),
+        model: $('#cfgModel').value.trim()
+      })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '保存失败')
+    const done = $('#cfgDone')
+    done.style.display = 'block'
+    setTimeout(() => { done.style.display = 'none'; loadConfig() }, 600)
+  } catch (e) {
+    alert(String(e.message || e))
+  } finally {
+    btn.disabled = false
+  }
+}
+async function send() {
+  const text = $('#inp').value.trim()
+  if (!text) return
+  $('#inp').value = ''
+  add('user', text)
+  const d = add('bot', '…')
+  const btn = $('#send')
+  btn.disabled = true
+  try {
+    const res = await fetch('/v1/chat', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ message: text })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '请求失败')
+    d.textContent = data.content || '（无输出）'
+    msgs.scrollTop = msgs.scrollHeight
+  } catch (e) {
+    d.className = 'msg err'
+    d.textContent = String(e.message || e)
+  } finally {
+    btn.disabled = false
+    $('#inp').focus()
+  }
+}
+$('#send').onclick = send
+$('#inp').onkeydown = (e) => { if (e.key === 'Enter') send() }
+$('#cfgSave').onclick = saveConfig
+$('#cfgCancel').onclick = loadConfig
+$('#cfgOpen').onclick = () => { $('#cfg').style.display = 'flex'; $('#chat').style.display = 'none' }
+loadConfig()
+</script>
+</body>
+</html>

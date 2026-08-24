@@ -1,0 +1,90 @@
+{
+  "name": "ai-harness",
+  "productName": "LAG harness",
+  "version": "0.1.0",
+  "description": "图形化 LAG harness：大型 Agent 生成器，自定义智能体、工作区、外部 API 调用",
+  "main": "electron/main.js",
+  "author": "LAG harness Team",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "icon": "node scripts/gen-icon.js",
+    "dev": "vite",
+    "build": "vite build",
+    "start": "electron .",
+    "start:prod": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "highlight.js": "^11.10.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "rehype-highlight": "^7.0.1",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.harness.ai",
+    "productName": "LAG harness",
+    "copyright": "Copyright © 2026 LAG harness",
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/skills",
+        "to": "builtin-skills",
+        "filter": ["**/*.skill.js", "**/*.skill.py"]
+      },
+      {
+        "from": "electron/mcps",
+        "to": "builtin-mcps",
+        "filter": ["**/*.mcp.js", "**/*.mcp.py"]
+      },
+      {
+        "from": "runtime/python",
+        "to": "python-runtime"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LAG harness"
+    }
+  }
+}

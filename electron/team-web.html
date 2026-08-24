@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>团队控制台 · LAG harness</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #1c2330;
+    --border: rgba(255,255,255,0.09); --text: #e6edf3; --text2: #9aa5b1;
+    --violet: #7c6cff; --violet2: #9b8cff; --green: #3fb950; --amber: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg2); }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .online { font-size: 12px; color: var(--text2); }
+  header .online b { color: var(--green); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #channel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 82%; padding: 8px 12px; border-radius: 10px; background: var(--bg3); border: 1px solid var(--border); align-self: flex-start; }
+  .msg .meta { font-size: 11px; color: var(--text2); margin-bottom: 2px; }
+  .msg .meta .who { color: var(--violet2); font-weight: 600; }
+  .msg.ai { border-color: rgba(124,108,255,0.35); background: rgba(124,108,255,0.10); align-self: flex-start; }
+  .msg.me { align-self: flex-end; background: rgba(124,108,255,0.16); border-color: rgba(124,108,255,0.4); }
+  .msg .body { white-space: pre-wrap; word-break: break-word; }
+  #composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg2); }
+  #input { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 9px 12px; font-size: 13.5px; outline: none; resize: none; }
+  #input:focus { border-color: var(--violet); }
+  #send { background: var(--violet); color: #fff; border: none; border-radius: 8px; padding: 0 18px; cursor: pointer; font-size: 13.5px; }
+  #send:hover { background: var(--violet2); }
+  .hint { font-size: 11px; color: var(--text2); align-self: center; white-space: nowrap; }
+  #assets { width: 250px; border-left: 1px solid var(--border); background: var(--bg2); padding: 12px; overflow-y: auto; }
+  #assets h3 { font-size: 12px; color: var(--text2); margin: 10px 0 6px; font-weight: 600; }
+  #assets h3:first-child { margin-top: 0; }
+  #assets ul { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  #assets li { font-size: 12.5px; padding: 5px 8px; border-radius: 6px; background: var(--bg3); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  #assets li .cnt { color: var(--text2); font-size: 11px; }
+  #assets li .dl { color: var(--violet2); text-decoration: none; font-size: 13px; padding: 0 2px; }
+  #assets li .dl:hover { color: #fff; }
+  #upload { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  #upload .tip { font-size: 11px; color: var(--text2); line-height: 1.5; }
+  #file { font-size: 11.5px; color: var(--text2); }
+  #uploadBtn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 0; cursor: pointer; font-size: 12.5px; }
+  #uploadBtn:hover { border-color: var(--violet); color: #fff; }
+  #uploadBtn:disabled { opacity: 0.5; cursor: default; }
+  #uploadInfo { font-size: 11px; color: var(--text2); min-height: 15px; }
+  #overlay { position: fixed; inset: 0; background: rgba(5,8,12,0.85); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #overlay .box { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 26px 30px; width: 320px; }
+  #overlay h2 { font-size: 16px; margin-bottom: 14px; }
+  #overlay input { width: 100%; background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 8px; outline: none; }
+  #overlay input:focus { border-color: var(--violet); }
+  #overlay button { margin-top: 14px; width: 100%; background: var(--violet); color: #fff; border: none; border-radius: 8px; padding: 9px; cursor: pointer; }
+  .empty { color: var(--text2); font-size: 12.5px; text-align: center; padding: 30px 0; }
+  @media (max-width: 720px) { #assets { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ <span id="tname">团队</span> · LAG harness</h1>
+  <span class="online">在线 <b id="online">0</b> 人</span>
+  <span class="hint">输入 <code>@ai 内容</code> 可交给主机智能体处理</span>
+</header>
+<main>
+  <div id="channel">
+    <div id="msgs"></div>
+    <div id="composer">
+      <textarea id="input" rows="1" placeholder="说点什么…（@ai 开头交给智能体）"></textarea>
+      <button id="send">发送</button>
+    </div>
+  </div>
+  <aside id="assets">
+    <h3>🎯 技能</h3><ul id="skills"></ul>
+    <h3>🌀 智能体</h3><ul id="agents"></ul>
+    <h3>🛠 工具</h3><ul id="tools"></ul>
+    <h3>🧠 记忆</h3><ul id="memories"></ul>
+    <div id="upload">
+      <div class="tip">📤 共享你的资产给团队（技能 .skill.js/py · 工具 .mcp.js/py · 智能体 .json），上传后主机可加载、成员可下载</div>
+      <input type="file" id="file" accept=".js,.py,.json,.md">
+      <button id="uploadBtn">上传到团队</button>
+      <div id="uploadInfo"></div>
+    </div>
+  </aside>
+</main>
+<div id="overlay">
+  <div class="box">
+    <h2>加入团队</h2>
+    <input id="nick" maxlength="20" placeholder="输入你的昵称">
+    <button id="join">进入团队频道</button>
+  </div>
+</div>
+<script>
+  var S = { memberId: '', name: '', since: 0, state: null }
+  function $(id) { return document.getElementById(id) }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] }) }
+  function api(p, opts) {
+    return fetch(p, opts).then(function (r) { return r.json() }).catch(function () { return null })
+  }
+  function renderMsg(m, me) {
+    var div = document.createElement('div')
+    div.className = 'msg' + (m.type === 'ai' ? ' ai' : '') + (me ? ' me' : '')
+    var who = (m.type === 'ai' ? 'AI 🤖' : esc(m.name || '成员'))
+    div.innerHTML = '<div class="meta"><span class="who">' + who + '</span> · ' + new Date(m.ts).toLocaleTimeString() + '</div><div class="body">' + esc(m.text) + '</div>'
+    return div
+  }
+  function renderAssets(a) {
+    $('skills').innerHTML = (a.skills || []).slice(0, 40).map(function (x) { return '<li><span>🎯 ' + esc(x.name) + '</span><a class="dl" href="/api/team/download?kind=skill&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
+    $('agents').innerHTML = (a.agents || []).slice(0, 40).map(function (x) { return '<li><span>🌀 ' + esc(x.name) + ' <span class="cnt">(' + x.nodes + ' 节点)</span></span><a class="dl" href="/api/team/download?kind=agent&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
+    $('tools').innerHTML = (a.mcps || []).slice(0, 40).map(function (x) { return '<li><span>🔧 ' + esc(x.name) + '</span><a class="dl" href="/api/team/download?kind=mcp&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
+    $('memories').innerHTML = (a.memories || []).slice(0, 40).map(function (x) { return '<li><span>🧠 ' + esc(x.title || x.name) + '</span></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
+  }
+  function kindOf(fileName) {
+    var f = String(fileName || '').toLowerCase()
+    if (/\.skill\.(js|py)$/.test(f)) return 'skill'
+    if (/\.mcp\.(js|py)$/.test(f)) return 'mcp'
+    if (/\.json$/.test(f)) return 'agent'
+    return null
+  }
+  function upload() {
+    var f = $('file').files[0]
+    if (!f) { $('uploadInfo').textContent = '请先选择文件'; return }
+    var kind = kindOf(f.name)
+    if (!kind) { $('uploadInfo').textContent = '不支持的文件：需要 .skill.js/.skill.py/.mcp.js/.mcp.py/.json'; return }
+    if (f.size > 1024 * 1024) { $('uploadInfo').textContent = '文件超过 1MB'; return }
+    var rd = new FileReader()
+    rd.onload = function () {
+      $('uploadBtn').disabled = true
+      $('uploadInfo').textContent = '上传中…'
+      api('/api/team/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: S.memberId, kind: kind, fileName: f.name, content: rd.result }) }).then(function (r) {
+        $('uploadBtn').disabled = false
+        if (r && r.ok) { $('uploadInfo').textContent = '✓ 已上传：' + r.savedAs; $('file').value = ''; poll() } else { $('uploadInfo').textContent = '✗ ' + ((r && r.error) || '上传失败') }
+      })
+    }
+    rd.readAsText(f)
+  }
+  $('uploadBtn').onclick = upload
+  function renderMembers(members) {
+    var list = Object.keys(members || {}).map(function (k) { return members[k] })
+    var online = list.filter(function (m) { return m.lastSeen > 0 && Date.now() - m.lastSeen < 8000 })
+    $('online').textContent = online.length
+    $('tname').textContent = S.state && S.state.name ? S.state.name : '团队'
+  }
+  function poll() {
+    api('/api/team/state?memberId=' + encodeURIComponent(S.memberId) + '&since=' + S.since).then(function (d) {
+      if (!d) return
+      S.state = d
+      renderMembers(d.members)
+      if (d.name) $('tname').textContent = d.name
+      if (d.agents) renderAssets(d)
+      if (d.channel && d.channel.length) {
+        d.channel.forEach(function (m) { $('msgs').appendChild(renderMsg(m, m.from === S.memberId)) })
+        S.since = d.channel[d.channel.length - 1].ts
+        $('msgs').scrollTop = $('msgs').scrollHeight
+      }
+    })
+  }
+  function post() {
+    var text = $('input').value.trim()
+    if (!text) return
+    api('/api/team/post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: S.memberId, text: text }) })
+    $('input').value = ''
+    $('input').style.height = 'auto'
+  }
+  $('join').onclick = function () {
+    var name = $('nick').value.trim()
+    if (!name) return
+    api('/api/team/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name }) }).then(function (d) {
+      if (!d || !d.memberId) return
+      S.memberId = d.memberId; S.name = d.name
+      try { localStorage.setItem('team_nick', name) } catch (e) {}
+      $('overlay').style.display = 'none'
+      poll()
+      setInterval(poll, 3000)
+    })
+  }
+  $('send').onclick = post
+  $('input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); post() }
+    if (e.key === 'Enter' && e.shiftKey) { setTimeout(function () { $('input').style.height = 'auto'; $('input').style.height = Math.min(120, $('input').scrollHeight) + 'px' }, 0) }
+  })
+  $('input').addEventListener('input', function () { $('input').style.height = 'auto'; $('input').style.height = Math.min(120, $('input').scrollHeight) + 'px' })
+  $('nick').value = (function () { try { return localStorage.getItem('team_nick') || '' } catch (e) { return '' } })()
+  $('nick').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('join').click() })
+  $('nick').focus()
+</script>
+</body>
+</html>

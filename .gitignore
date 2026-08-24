@@ -1,0 +1,20 @@
+node_modules/
+dist/
+release/
+release_new/
+runtime/
+build/icon.png
+*.log
+# 运行数据（含 API Key、会话、记忆、审计等敏感内容）——绝不提交
+data/
+# 开发期临时测试脚本（根目录，含 e2e-sandbox 等）
+/*.mjs
+/m2-*.js
+/m3-*.js
+# 本地构建工具/第三方 Python 包
+build-tools/
+# 测试运行数据残留
+data-test2/
+# Python 缓存
+__pycache__/
+*.pyc
