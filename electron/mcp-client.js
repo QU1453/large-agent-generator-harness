@@ -98,9 +98,73 @@ class MCPConnection {
   }
 
   async _connectHttp() {
-    // Streamable HTTP：先发 initialize（无鉴权试探），网络可达性由 _request 验证
-    await new Promise((r) => setTimeout(r, 50))
+    // 两种 http 传输：
+    //   SSE：url 以 /mcp/sse 结尾 → GET 建立 SSE 会话拿 sessionId，后续 POST /mcp/messages?sessionId=
+    //   Streamable HTTP：直接 POST JSON-RPC 到 url（响应 JSON 或 SSE 流）
+    this.sseSessionId = null
+    this.sseStream = null
+    this.sseBuf = ''
+    if (/\/mcp\/sse(\?|$)/.test(this.cfg.url || '')) {
+      await this._connectSse()
+    } else {
+      // Streamable HTTP：先发 initialize（无鉴权试探），网络可达性由 _request 验证
+      await new Promise((r) => setTimeout(r, 50))
+    }
   }
+
+  // SSE 传输：GET /mcp/sse 建立会话，服务端推 endpoint 事件带 sessionId；请求走 POST /mcp/messages?sessionId=
+  _connectSse() {
+    return new Promise((resolve, reject) => {
+      const { net } = require('electron')
+      const url = this.cfg.url
+      net.fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream', ...(this.cfg.headers || {}) }
+      }).then(async (res) => {
+        if (!res.ok) { reject(new Error(`MCP SSE ${res.status}`)); return }
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        this.sseStream = reader
+        let buf = ''
+        const timer = setTimeout(() => reject(new Error('SSE 会话建立超时')), 8000)
+        const pump = async () => {
+          try {
+            const { done, value } = await reader.read()
+            if (done) { this.ready = false; this._failAll('外部 MCP SSE 连接已关闭'); return }
+            buf += decoder.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop()
+            let gotSession = false
+            for (const line of lines) {
+              const t = line.trim()
+              if (!t.startsWith('data:')) continue
+              const p = t.slice(5).trim()
+              if (!p || p === '[DONE]') continue
+              const m = p.match(/\/mcp\/messages\?sessionId=([0-9a-fA-F]+)/)
+              if (m) {
+                this.sseSessionId = m[1]
+                gotSession = true
+                continue
+              }
+              // 常规消息：路由到 pending（与 _onData 相同处理）
+              try { this._handleMsg(JSON.parse(p)) } catch { /* 忽略 */ }
+            }
+            if (gotSession) {
+              clearTimeout(timer)
+              resolve()
+            }
+            pump()
+          } catch (e) {
+            clearTimeout(timer)
+            reject(e)
+          }
+        }
+        pump()
+      }).catch(reject)
+    })
+  }
+
+  // SSE 传输下：请求 POST 到 /mcp/messages?sessionId=xxx（见下方 _httpPost 开头分支）
 
   _onData(chunk) {
     this.buf += chunk
@@ -171,6 +235,26 @@ class MCPConnection {
     const { net } = require('electron')
     const url = this.cfg.url
     if (!url) throw new Error('缺少 MCP URL')
+    // SSE 传输（url 以 /mcp/sse 结尾）：POST 到 messages 端点，结果经已建立的 SSE 流回
+    if (this.sseSessionId) {
+      const msgUrl = url.replace(/\/mcp\/sse(\?|$)/, '/mcp/messages?sessionId=' + this.sseSessionId)
+      const res = await net.fetch(msgUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...(this.cfg.headers || {})
+        },
+        body: JSON.stringify(payload)
+      })
+      if (!res.ok) {
+        let detail = ''
+        try { detail = await res.text() } catch { /* 忽略 */ }
+        throw new Error(`MCP HTTP ${res.status}: ${detail.slice(0, 300)}`)
+      }
+      // 202 + 空响应体：结果经 sseStream 的 _handleMsg 路由回 pending
+      return
+    }
     const res = await net.fetch(url, {
       method: 'POST',
       headers: {

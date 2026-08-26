@@ -784,6 +784,22 @@ async function runAgentInner(opts) {
         fail(`子智能体不存在: ${subId}`)
         return
       }
+      // 节点级工具/记忆链接：工作流里工具节点/记忆节点连到本子智能体节点时注入到子图技能节点
+      const nodeToolsRaw = Array.isArray(node.tools) ? node.tools : []
+      const nodeMemoriesRaw = Array.isArray(node.memories) ? node.memories : []
+      const inToolIds = edges.filter((e) => e.to === nodeId).map((e) => e.from).filter((f) => capabilities[f])
+      const inheritedTools = [...new Set([...nodeToolsRaw, ...inToolIds.map((f) => capabilities[f])])]
+      if (inheritedTools.length || nodeMemoriesRaw.length) {
+        const g = { ...sub, nodes: (sub.nodes || []).map((sn) => {
+          if (sn.type !== 'skill') return sn
+          return {
+            ...sn,
+            tools: [...new Set([...(sn.tools || []), ...inheritedTools])],
+            memories: [...new Set([...(sn.memories || []), ...nodeMemoriesRaw])]
+          }
+        }) }
+        sub = g
+      }
       const subInputs = {}
       for (const sn of sub.nodes || []) {
         if (sn.type === 'input') subInputs[sn.id] = upstream.join('\n\n')

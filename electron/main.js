@@ -1381,6 +1381,8 @@ if (!gotLock) {
     registerIpc()
     createWindow()
     await restartApi()
+    // 外部 MCP 自举连接（如指向本机 37800 端口）：等 API Server 就绪后重连一次
+    try { await externalMcps.reload() } catch { /* 重连失败不阻塞 */ }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

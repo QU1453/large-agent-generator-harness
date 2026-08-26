@@ -538,7 +538,7 @@ P4-1 → P4-2 → P4-3（骨架）→ P4-4 → P4-5 → P4-6 → P4-7。
 | 速度环智能体 | speed_loop | 角色=速度环调参工程师；依赖电流环已稳定 |
 | 位置环智能体 | position_loop | 角色=位置环调参工程师；依赖速度环已稳定 |
 
-**④ 工作流**（`save_workflow`）：画布编排「输入 → 电流环智能体 → 速度环智能体 → 位置环智能体 → 输出」，`data` 连线串联（上游输出作为下游输入），子智能体节点引用上述三个智能体定义。
+**④ 工作流**（`save_workflow`）：画布编排「输入 → 协议 → 电流环智能体 → 协议 → 速度环智能体 → 协议 → 位置环智能体 → 输出」，`data` 连线串联；**显式挂接**：`pid-tuning` 记忆节点（reads policy/facts/episodes/skills）、6 个工具节点（`tool:motor_connect`/`tool:motor_set_pid`/`tool:motor_read_samples`/`tool:mem_route`/`tool:mem_record_lesson`）、外部 MCP 工具节点（`ext:get_health`，标准 MCP 协议）；工具/记忆节点经 data 连线注入各子智能体节点（子智能体分支已支持透传到子图技能节点）。
 
 **⑤ 记忆**：已建 `pid-tuning` 卡片（policy/facts/episodes/skills/ledger/bus + pid_tuner.skill.py），本次直接沿用；各智能体在记忆节点/接口中绑定 `pid-tuning`。
 
