@@ -17,6 +17,15 @@ const Icons = {
       <path d="M7.5 17c.8-2 2.4-3 4.5-3s3.7 1 4.5 3" />
     </svg>
   ),
+  bot: (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="7.5" width="16" height="11" rx="3" />
+      <circle cx="9" cy="12.5" r="1.1" />
+      <circle cx="15" cy="12.5" r="1.1" />
+      <path d="M12 7.5V4M9.5 4h5" />
+      <path d="M12 18.5v1.5" />
+    </svg>
+  ),
   workspace: (
     <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -86,18 +95,19 @@ const Icons = {
 
 const NAV = [
   { key: 'chat', label: '会话', icon: Icons.chat },
-  { key: 'agents', label: '智能体', icon: Icons.flow },
+  { key: 'workflows', label: '工作流', icon: Icons.flow },
+  { key: 'agents', label: '智能体', icon: Icons.bot },
   { key: 'protocols', label: '协议', icon: Icons.protocol },
   { key: 'skills', label: '技能', icon: Icons.skills },
   { key: 'memory', label: '记忆', icon: Icons.memory },
-  { key: 'mcp', label: '工具/MCP', icon: Icons.mcp },
+  { key: 'toolPacks', label: '工具包', icon: Icons.mcp },
   { key: 'terminal', label: '终端', icon: Icons.terminal },
   { key: 'team', label: '团队', icon: Icons.team },
   { key: 'workspace', label: '工作区', icon: Icons.workspace }
 ]
 
 export default function Sidebar({
-  view, setView, sessions, activeId, skills, agents, mcps, workspace, apiStatus,
+  view, setView, sessions, activeId, skills, agents, toolPacks, workspace, apiStatus,
   sandboxes, activeSandbox, agRunning, memoryCount,
   onSelectSession, onCreateSession, onDeleteSession, onRenameSession,
   onSelectSandbox, onCreateSandbox, onDeleteSandbox, onOpenSettings
@@ -141,7 +151,7 @@ export default function Sidebar({
             <span className="nav-icon">{n.icon}</span>
             <span>{n.label}</span>
             {n.key === 'agents' && <span className="nav-count">{agents.length}</span>}
-            {n.key === 'mcp' && <span className="nav-count">{mcps.length}</span>}
+            {n.key === 'toolPacks' && <span className="nav-count">{toolPacks.length}</span>}
             {n.key === 'skills' && <span className="nav-count">{skills.length}</span>}
             {n.key === 'memory' && <span className="nav-count">{memoryCount || 0}</span>}
             {n.key === 'agents' && agRunning && (

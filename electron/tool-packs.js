@@ -1,31 +1,37 @@
-// MCP 加载器（双引擎）
-// .js MCP：主进程直接 require 加载（handler 为 JS 函数）
-// .py MCP：常驻 Python 子进程执行（handler 为 Python 函数）
-// 内置 MCP 首次启动复制到用户数据目录，可修改源码客制化，保存后"重载"生效。
+// 工具包加载器（双引擎）
+// .js 工具包：主进程直接 require 加载（handler 为 JS 函数）
+// .py 工具包：常驻 Python 子进程执行（handler 为 Python 函数）
+// 内置工具包首次启动复制到用户数据目录，可修改源码客制化，保存后"重载"生效。
+// 命名：内部工具包统一 `tool:` 前缀 / `tool_` 函数名 / `.tool.js|.tool.py` 后缀；
+// 兼容旧名（历史遗留的 mcp: / mcp_ / .mcp.*）读取时一并识别，不迁移也不报错。
 const fs = require('fs')
 const path = require('path')
 const { PythonEngine, checkPython } = require('./python-engine')
 
 let builtinDir = null
 let userDir = null
-let jsMcps = []      // JS 定义的 MCP
-let pyMcps = []      // Python 定义的 MCP（含 tools，来自引擎）
+let jsPacks = []     // JS 定义的工具包
+let pyPacks = []     // Python 定义的工具包（含 tools，来自引擎）
 let pyLoadError = null
 let engine = null    // PythonEngine 单例
 let pyLoadPromise = null
+
+// 后缀识别：新 .tool.* 与旧 .mcp.* 都认
+const isPackFile = (name) => /\.(tool|mcp)\.(js|py)$/.test(name)
+const packIdOf = (name) => path.basename(name).replace(/\.(tool|mcp)\.(js|py)$/, '')
 
 function init({ builtin, user }) {
   builtinDir = builtin
   userDir = user
   fs.mkdirSync(userDir, { recursive: true })
-  ensureUserMcps()
+  ensureUserPacks()
   return reload()
 }
 
-function ensureUserMcps() {
+function ensureUserPacks() {
   if (!builtinDir || !fs.existsSync(builtinDir)) return
   for (const name of fs.readdirSync(builtinDir)) {
-    if (!name.endsWith('.mcp.js') && !name.endsWith('.mcp.py')) continue
+    if (!isPackFile(name)) continue
     const dest = path.join(userDir, name)
     if (!fs.existsSync(dest)) {
       try { fs.copyFileSync(path.join(builtinDir, name), dest) } catch { /* 忽略 */ }
@@ -38,7 +44,7 @@ function loadJsDir(dir) {
   const list = []
   if (!fs.existsSync(dir)) return list
   for (const name of fs.readdirSync(dir)) {
-    if (!name.endsWith('.mcp.js')) continue
+    if (!/\.(tool|mcp)\.js$/.test(name)) continue
     const file = path.join(dir, name)
     try {
       delete require.cache[require.resolve(file)]
@@ -47,7 +53,7 @@ function loadJsDir(dir) {
       const tools = Array.isArray(def.tools) ? def.tools.filter((t) => t && t.name && typeof t.handler === 'function') : []
       list.push({ ...def, tools, file, kind: 'js' })
     } catch (e) {
-      console.warn(`[mcp] 加载失败 ${name}:`, e.message)
+      console.warn(`[tool-packs] 加载失败 ${name}:`, e.message)
     }
   }
   return list
@@ -58,15 +64,15 @@ function scanPyFiles(dir) {
   const list = []
   if (!fs.existsSync(dir)) return list
   for (const name of fs.readdirSync(dir)) {
-    if (!name.endsWith('.mcp.py')) continue
+    if (!/\.(tool|mcp)\.py$/.test(name)) continue
     const file = path.join(dir, name)
-    list.push({ id: path.basename(name, '.mcp.py'), file, name, kind: 'py' })
+    list.push({ id: packIdOf(name), file, name, kind: 'py' })
   }
   return list
 }
 
 async function loadPyTools() {
-  pyMcps = []
+  pyPacks = []
   pyLoadError = null
   const pyFiles = scanPyFiles(userDir)
   if (!pyFiles.length) return
@@ -74,23 +80,23 @@ async function loadPyTools() {
   engine = new PythonEngine(pyFiles.map((f) => f.file))
   try {
     const modules = await engine.listTools()
-    pyMcps = modules
+    pyPacks = modules
   } catch (e) {
     pyLoadError = e.message
-    console.warn('[mcp] Python 引擎加载失败:', e.message)
+    console.warn('[tool-packs] Python 引擎加载失败:', e.message)
   }
 }
 
 // ---- 对外 ----
 function reload() {
-  jsMcps = loadJsDir(userDir)
+  jsPacks = loadJsDir(userDir)
   pyLoadPromise = loadPyTools()
   return list()
 }
 
 async function list() {
   await pyLoadPromise
-  const js = jsMcps.map((m) => ({
+  const js = jsPacks.map((m) => ({
     id: m.id,
     name: m.name || m.id,
     description: m.description || '',
@@ -98,7 +104,7 @@ async function list() {
     tools: m.tools.map((t) => ({ name: t.name, description: t.description || '' })),
     file: m.file
   }))
-  const py = pyMcps.map((m) => ({
+  const py = pyPacks.map((m) => ({
     id: m.id,
     name: m.name || m.id,
     description: m.description || '',
@@ -106,17 +112,17 @@ async function list() {
     tools: (m.tools || []).map((t) => ({ name: t.name, description: t.description || '' })),
     file: m.file
   }))
-  return { mcps: [...js, ...py], python: checkPython(), pyLoadError }
+  return { toolPacks: [...js, ...py], python: checkPython(), pyLoadError }
 }
 
 // 全部可用工具（供 LLM schema 合并，同步）
 function allTools() {
   const out = []
-  for (const m of jsMcps) {
-    for (const t of m.tools) out.push({ ...t, mcpId: m.id, key: `mcp:${t.name}` })
+  for (const m of jsPacks) {
+    for (const t of m.tools) out.push({ ...t, packId: m.id, key: `tool:${t.name}` })
   }
-  for (const m of pyMcps) {
-    for (const t of m.tools || []) out.push({ ...t, mcpId: m.id, key: `mcp:${t.name}` })
+  for (const m of pyPacks) {
+    for (const t of m.tools || []) out.push({ ...t, packId: m.id, key: `tool:${t.name}` })
   }
   return out
 }
@@ -124,26 +130,26 @@ function allTools() {
 function enabledToolNames(agentTools = []) {
   const names = new Set()
   for (const ref of agentTools) {
-    if (typeof ref === 'string' && ref.startsWith('mcp:')) names.add(ref.slice(4))
+    if (typeof ref === 'string' && (ref.startsWith('tool:') || ref.startsWith('mcp:'))) names.add(ref.slice(ref.indexOf(':') + 1))
   }
   return names
 }
 
 function findJsTool(name) {
-  for (const m of jsMcps) {
+  for (const m of jsPacks) {
     for (const t of m.tools) if (t.name === name) return t
   }
   return null
 }
 
 function findPyTool(name) {
-  for (const m of pyMcps) {
+  for (const m of pyPacks) {
     for (const t of m.tools || []) if (t.name === name) return t
   }
   return null
 }
 
-// 执行 MCP 工具（async）
+// 执行工具包工具（async）
 async function execTool(name, args) {
   const jsTool = findJsTool(name)
   if (jsTool) {
@@ -162,12 +168,12 @@ async function execTool(name, args) {
       return JSON.stringify({ error: e.message || String(e) })
     }
   }
-  return JSON.stringify({ error: `MCP 工具不存在: ${name}` })
+  return JSON.stringify({ error: `工具包工具不存在: ${name}` })
 }
 
 function getSourceFile(id) {
-  for (const m of jsMcps) if (m.id === id) return m.file
-  for (const m of pyMcps) if (m.id === id) return m.file
+  for (const m of jsPacks) if (m.id === id) return m.file
+  for (const m of pyPacks) if (m.id === id) return m.file
   return null
 }
 

@@ -130,16 +130,16 @@ async function teamAssets() {
     skills: skills_.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, description: (s.description || '').slice(0, 80), owner: own('skill', s.id) })),
     agents: agents_.map((a) => ({ id: a.id, name: a.name, nodes: (a.nodes || []).length, owner: own('agent', a.id) })),
     memories: memories_.map((m) => ({ name: m.name, title: m.title, desc: (m.desc || '').slice(0, 80), owner: own('memory', m.name) })),
-    mcps: mcps_.map((t) => ({ id: t.name, name: t.name, description: (t.description || '').slice(0, 80), owner: own('mcp', t.name) }))
+    mcps: mcps_.map((t) => ({ id: t.name, name: t.name, description: (t.description || '').slice(0, 80), owner: own('toolPack', t.name) }))
   }
 }
 
-// 资产文件名白名单：只允许合法后缀，防路径穿越
+// 资产文件名白名单：只允许合法后缀，防路径穿越（兼容旧 .mcp.* 资产名）
 function safeAssetName(kind, fileName) {
   const base = path.basename(String(fileName || ''))
   const ok =
     (kind === 'skill' && /^[\w\u4e00-\u9fa5-]+\.skill\.(js|py)$/.test(base)) ||
-    (kind === 'mcp' && /^[\w\u4e00-\u9fa5-]+\.mcp\.(js|py)$/.test(base)) ||
+    (kind === 'toolPack' && /^[\w\u4e00-\u9fa5-]+\.(tool|mcp)\.(js|py)$/.test(base)) ||
     (kind === 'agent' && base.endsWith('.json'))
   return ok ? base : null
 }
@@ -148,7 +148,7 @@ function safeAssetName(kind, fileName) {
 async function teamUpload(body) {
   const kind = String(body.kind || '')
   const fileName = safeAssetName(kind, body.fileName)
-  if (!fileName) return { ok: false, error: '文件类型/文件名不合法（需要 .skill.js/.skill.py/.mcp.js/.mcp.py/.json）' }
+  if (!fileName) return { ok: false, error: '文件类型/文件名不合法（需要 .skill.js/.skill.py/.tool.js/.tool.py/.json）' }
   const content = String(body.content == null ? '' : body.content)
   if (!content || content.length > 1024 * 1024) return { ok: false, error: '内容为空或超过 1MB' }
   const uploader = (team && team.getState().members[body.memberId] && team.getState().members[body.memberId].name) || '成员'
@@ -163,12 +163,12 @@ async function teamUpload(body) {
     if (team) team.addAsset('agent', ag.id, uploader)
     return { ok: true, savedAs: `${ag.name}（${ag.id}）`, kind, title: ag.name }
   }
-  if (kind === 'skill' || kind === 'mcp') {
-    const dir = path.join(userDataDir, kind === 'skill' ? 'skills' : 'mcps')
+  if (kind === 'skill' || kind === 'toolPack') {
+    const dir = path.join(userDataDir, kind === 'skill' ? 'skills' : 'tool-packs')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, fileName), content, 'utf8')
     if (kind === 'skill') await skills.reload()
-    else await require('./mcp').reload()
+    else await require('./tool-packs').reload()
     if (team) team.addAsset(kind, fileName, uploader)
     return { ok: true, savedAs: fileName, kind, title: fileName }
   }
@@ -182,12 +182,12 @@ function teamDownload(kind, name) {
     const ag = agentStore.get(clean)
     return ag ? JSON.stringify(ag, null, 2) : null
   }
-  if (kind === 'skill' || kind === 'mcp') {
-    const dir = path.join(userDataDir, kind === 'skill' ? 'skills' : 'mcps')
+  if (kind === 'skill' || kind === 'toolPack') {
+    const dir = path.join(userDataDir, kind === 'skill' ? 'skills' : 'tool-packs')
     // name 可能是 id（assistant / py_eval）或完整文件名（上传记录存 fileName）
     let file = path.join(dir, clean)
     if (!fs.existsSync(file)) {
-      const ext = kind === 'skill' ? 'skill' : 'mcp'
+      const ext = kind === 'skill' ? 'skill' : '(tool|mcp)'
       file = [path.join(dir, `${clean}.${ext}.js`), path.join(dir, `${clean}.${ext}.py`)].find((c) => fs.existsSync(c)) || file
     }
     if (!fs.existsSync(file)) return null

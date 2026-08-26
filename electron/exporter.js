@@ -5,7 +5,7 @@
 //   executor/          执行引擎（Python：图编排 + zone 总线 + LLM 循环 + 工具）
 //   transports/        传输层（http_server + cli）
 //   web/index.html     自带聊天控制台
-//   tools/             引用的 .mcp.py 工具（复制）
+//   tools/             引用的 .tool.py 工具（复制）
 //   runtime/           内嵌 Python 运行时（复用 Harness runtime/python）
 //   start.bat/.sh      一键启动
 //   data/              运行期数据（会话/记忆，首次启动创建）
@@ -18,8 +18,9 @@ const path = require('path')
 const crypto = require('crypto')
 const { execFile, execFileSync } = require('child_process')
 const skills = require('./skills')
-const mcp = require('./mcp')
+const toolPacks = require('./tool-packs')
 const memory = require('./memory')
+const agent = require('./agent')
 
 // 当前工程内置的 Python 运行时目录（导出时整体复制）
 function runtimeSource() {
@@ -77,20 +78,20 @@ function buildReadme(target) {
 async function checkAgent(ag, skillList, mcpKindMap, agentStore) {
   const warnings = []
   const errors = []
-  const skillsByTools = new Map() // mcp tool name -> source kind
-  for (const t of mcp.allTools()) {
-    const kind = mcpKindMap[t.mcpId] || 'js'
+  const skillsByTools = new Map() // tool name -> source kind
+  for (const t of toolPacks.allTools()) {
+    const kind = mcpKindMap[t.packId] || 'js'
     skillsByTools.set(t.name, kind)
   }
   const usedSkills = new Map()
   const checkToolRefs = (refs, who) => {
     for (const ref of refs || []) {
-      if (ref.startsWith('mcp:')) {
-        const name = ref.slice(4)
+      if (ref.startsWith('tool:') || ref.startsWith('mcp:')) {
+        const name = ref.slice(ref.indexOf(':') + 1)
         const kind = skillsByTools.get(name)
         if (kind === 'py') continue
         if (kind === 'js') {
-          warnings.push(`${who}引用的 MCP 工具 ${name} 是 JS 实现（.mcp.js），导出物无法直接运行，调用将返回"工具不存在"`)
+          warnings.push(`${who}引用的工具 ${name} 是 JS 实现（.tool.js），导出物无法直接运行，调用将返回"工具不存在"`)
         } else {
           warnings.push(`${who}引用的工具 ${name} 未找到`)
         }
@@ -116,13 +117,16 @@ async function checkAgent(ag, skillList, mcpKindMap, agentStore) {
           continue
         }
         const sub = agentStore.get(subId)
-        if (!sub) {
+        // 工作流中没有 → 智能体定义（data/agent-defs，单智能体转最小图）
+        const subDef = !sub && typeof agentStore.getDef === 'function' ? agentStore.getDef(subId) : null
+        if (!sub && !subDef) {
           errors.push(`子智能体节点「${node.label || node.id}」引用的智能体不存在: ${subId}`)
           continue
         }
+        const walkSub = sub || (subDef && agent.defToGraph(subDef))
         if (seen.has(subId)) continue
         seen.add(subId)
-        walk(sub.nodes || [])
+        walk(walkSub.nodes || [])
         continue
       }
       if (node.type === 'input' || node.type === 'output') {
@@ -192,6 +196,21 @@ function deriveContract(ag) {
   return { input: inputs, output: outputs }
 }
 
+// 导出密钥清洗：节点级模型配置绝不含真实 url/api（用户铁律：导出后不能带 api 和 url）。
+// baseUrl/apiKey 一律替换为 env: 占位符（运行时经配置注入接口提供）；模型名非密钥，原样保留。
+function sanitizeNodeModels(nodes) {
+  return (nodes || []).map((n) => {
+    if (!n) return n
+    const m = n.model
+    if (!m || m.inherit !== false) return { ...n, model: undefined }
+    const s = { inherit: false }
+    if (m.model) s.model = m.model
+    if (m.baseUrl) s.baseUrl = 'env:LLM_BASE_URL'
+    if (m.apiKey) s.apiKey = 'env:LLM_API_KEY'
+    return { ...n, model: s }
+  })
+}
+
 // 生成 manifest（固化技能：动态 systemPrompt 在空上下文求值为静态文本）
 async function buildManifest(ag, skillList, opts) {
   const used = new Map()
@@ -216,7 +235,12 @@ async function buildManifest(ag, skillList, opts) {
   const collectSubs = (nodes) => {
     for (const n of nodes || []) {
       if (n.type === 'subagent' && n.subagentId) {
-        const sub = opts.store && opts.store.get(n.subagentId)
+        let sub = opts.store && opts.store.get(n.subagentId)
+        // 工作流中没有 → 智能体定义（data/agent-defs，单智能体转最小图）
+        if (!sub && opts.store && typeof opts.store.getDef === 'function') {
+          const def = opts.store.getDef(n.subagentId)
+          if (def) sub = agent.defToGraph(def)
+        }
         if (sub) {
           subAgents[n.subagentId] = { id: sub.id, name: sub.name, nodes: sub.nodes || [], edges: sub.edges || [] }
           collectSkills(sub.nodes || [])
@@ -254,16 +278,18 @@ async function buildManifest(ag, skillList, opts) {
     model: { baseUrl: 'env:LLM_BASE_URL', apiKey: 'env:LLM_API_KEY', default: 'env:LLM_MODEL' },
     auth: { token: crypto.randomBytes(16).toString('hex') },
     skills: skillsOut,
-    tools: [...new Set(skillsOut.flatMap((a) => (a.tools || []).filter((t) => t.startsWith('mcp:')).map((t) => t.slice(4))))],
-    agent: { nodes: ag.nodes, edges: ag.edges },
-    subAgents: subAgents,
+    tools: [...new Set(skillsOut.flatMap((a) => (a.tools || []).filter((t) => t.startsWith('tool:') || t.startsWith('mcp:')).map((t) => t.slice(t.indexOf(':') + 1))))],
+    agent: { nodes: sanitizeNodeModels(ag.nodes), edges: ag.edges },
+    subAgents: Object.fromEntries(Object.entries(subAgents).map(([k, sub]) => [k, { ...sub, nodes: sanitizeNodeModels(sub.nodes) }])),
     createdAt: Date.now()
   }
 }
 
-// 复制被引用的 .mcp.py 工具到导出包
+// 复制被引用的 .tool.py 工具到导出包（兼容旧 .mcp.py）
 async function copyPyTools(manifest, ag, outToolsDir) {
   const needed = new Set()
+  const isPackRef = (ref) => ref.startsWith('tool:') || ref.startsWith('mcp:')
+  const packNameOf = (ref) => ref.slice(ref.indexOf(':') + 1)
   // 收集节点级工具引用（含子智能体节点内的节点）
   const collectRefs = (nodes) => {
     for (const n of nodes || []) {
@@ -275,32 +301,32 @@ async function copyPyTools(manifest, ag, outToolsDir) {
       if (n.type === 'input' || n.type === 'output') {
         // 自定义输入/输出节点的节点级工具链接
         for (const ref of n.tools || []) {
-          if (ref.startsWith('mcp:')) needed.add(ref.slice(4))
+          if (isPackRef(ref)) needed.add(packNameOf(ref))
         }
         continue
       }
       if (n.type !== 'skill' || !n.skillId) continue
       const skill = (manifest.skills || []).find((a) => a.id === n.skillId)
       for (const ref of skill?.tools || []) {
-        if (ref.startsWith('mcp:')) needed.add(ref.slice(4))
+        if (isPackRef(ref)) needed.add(packNameOf(ref))
       }
       // 节点级工具链接
       for (const ref of n.tools || []) {
-        if (ref.startsWith('mcp:')) needed.add(ref.slice(4))
+        if (isPackRef(ref)) needed.add(packNameOf(ref))
       }
     }
   }
   collectRefs(ag.nodes || [])
-  const all = mcp.allTools()
+  const all = toolPacks.allTools()
   const copied = []
   for (const name of needed) {
     const t = all.find((x) => x.name === name)
     if (!t) continue
-    const mcpId = t.mcpId
-    const file = mcp.getSourceFile(mcpId)
-    const list = await mcp.list()
-    const meta = list.mcps.find((m) => m.id === mcpId)
-    if (file && meta && meta.kind === 'py' && file.endsWith('.mcp.py')) {
+    const packId = t.packId
+    const file = toolPacks.getSourceFile(packId)
+    const list = await toolPacks.list()
+    const meta = list.toolPacks.find((m) => m.id === packId)
+    if (file && meta && meta.kind === 'py' && /\.(tool|mcp)\.py$/.test(file)) {
       fs.copyFileSync(file, path.join(outToolsDir, path.basename(file)))
       copied.push(path.basename(file))
     }
@@ -318,8 +344,8 @@ async function exportAgent(opts) {
   if (!ag || !ag.nodes) throw new Error('智能体数据无效')
 
   const skillList = await skills.list()
-  const mcpList = await mcp.list()
-  const mcpKindMap = Object.fromEntries(mcpList.mcps.map((m) => [m.id, m.kind]))
+  const mcpList = await toolPacks.list()
+  const mcpKindMap = Object.fromEntries(mcpList.toolPacks.map((m) => [m.id, m.kind]))
 
   const check = await checkAgent(ag, skillList, mcpKindMap, opts.store)
   if (!check.ok) {

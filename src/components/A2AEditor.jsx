@@ -63,6 +63,14 @@ export default function A2AEditor({ open, title, draft, onChange, onPeers, onSav
             <span className="field-label">拒绝来源 deniedPeers（skillId，逗号分隔）</span>
             <input className="input" value={(draft.access.deniedPeers || []).join(', ')} onChange={(e) => onPeers('deniedPeers', e.target.value)} placeholder="如: malicious_agent" />
           </label>
+          <label className="field">
+            <span className="field-label">允许工具 allowedTools（留空=不限制；工具名，逗号分隔，P4-1 工具管道 pre-execute 拦截）</span>
+            <input className="input" value={(draft.access.allowedTools || []).join(', ')} onChange={(e) => onPeers('allowedTools', e.target.value)} placeholder="如: read_file, list_dir" />
+          </label>
+          <label className="field">
+            <span className="field-label">拒绝工具 deniedTools（工具名，逗号分隔，命中即拦截）</span>
+            <input className="input" value={(draft.access.deniedTools || []).join(', ')} onChange={(e) => onPeers('deniedTools', e.target.value)} placeholder="如: write_file" />
+          </label>
           <label className="field switch-row">
             <span className="field-label">审计日志（写入 data/audit/&lt;画布&gt;.jsonl）</span>
             <input type="checkbox" checked={draft.audit} onChange={(e) => onChange({ audit: e.target.checked })} />

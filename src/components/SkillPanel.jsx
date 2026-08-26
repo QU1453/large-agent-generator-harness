@@ -227,6 +227,7 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
   const [loading, setLoading] = useState(true)
   const [noteName, setNoteName] = useState('')
   const [noteBox, setNoteBox] = useState(false)
+  const [renameBox, setRenameBox] = useState(null) // 文件重命名弹窗 {f, value}
   const [ctx, setCtx] = useState(null) // 文件树右键 {f, x, y}
   const [runOut, setRunOut] = useState(null) // Python 运行结果 {file, ok, exitCode, stdout, stderr}
 
@@ -341,6 +342,26 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
     try {
       await h.skills.setFileReadable(id, f.rel, next)
       onToast?.(`${f.rel} 已${next ? '设为可读' : '设为不可读'}`, 'success')
+      await loadFiles()
+    } catch (e) {
+      onToast?.(e.message || String(e), 'error')
+    }
+  }
+
+  // 重命名文件：主组件不可改名；无扩展名自动补 .md；改名后若正打开则跟随
+  const doRename = async () => {
+    if (!renameBox) return
+    const f = renameBox.f
+    const nv = (renameBox.value || '').trim()
+    if (!nv) { onToast?.('新文件名不能为空', 'error'); return }
+    try {
+      const r = await h.skills.renameFile(id, f.rel, nv)
+      onToast?.(`已重命名 ${f.rel} → ${r.rel}`, 'success')
+      setRenameBox(null)
+      if (activeRel === f.rel) {
+        setActiveRel(r.rel)
+        setDraft(await h.skills.readFile(id, r.rel))
+      }
       await loadFiles()
     } catch (e) {
       onToast?.(e.message || String(e), 'error')
@@ -467,11 +488,33 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
         </div>
       )}
 
+      {renameBox && (
+        <div className="modal-overlay" onClick={() => setRenameBox(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>✏ 重命名 · {renameBox.f.rel}</h2>
+              <button className="icon-btn" onClick={() => setRenameBox(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <label className="field">
+                <span className="field-label">新文件名（无扩展名默认 .md）</span>
+                <input className="input" autoFocus value={renameBox.value} placeholder="如: notes/使用说明 或 helper.py" onChange={(e) => setRenameBox((r) => r && { ...r, value: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') doRename() }} />
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button className="btn ghost" onClick={() => setRenameBox(null)}>取消</button>
+              <button className="btn primary" onClick={doRename}>重命名</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {ctx && (
         <div className="mem-ctx-overlay" onClick={() => setCtx(null)} onContextMenu={(e) => { e.preventDefault(); setCtx(null) }}>
           <div className="mem-ctx" style={{ left: ctx.x, top: ctx.y }}>
             <div className="mem-ctx-title">📄 {ctx.f.rel} <span className={ctx.f.readable === false ? 'ctx-state off' : 'ctx-state'}>{ctx.f.readable === false ? '不可读' : '可读'}</span></div>
             <button className="mem-ctx-item" onClick={() => { const f = ctx.f; setCtx(null); toggleReadable(f) }} disabled={ctx.f.main} title={ctx.f.main ? '主组件文件始终可读' : '切换 LLM 是否可读此文件'}>{ctx.f.readable === false ? '🔓 设为可读' : '🔒 设为不可读'}</button>
+            <button className="mem-ctx-item" onClick={() => { const f = ctx.f; setCtx(null); setRenameBox({ f, value: f.rel }) }} disabled={ctx.f.main} title={ctx.f.main ? '主组件文件不可重命名' : '重命名此文件'}>✏ 重命名</button>
             <button className="mem-ctx-item danger" onClick={() => { const f = ctx.f; setCtx(null); deleteFile(f) }} disabled={ctx.f.main || ctx.f.protected} title={ctx.f.main ? '主组件不可删除' : '删除此文件'}>🗑 删除文件</button>
             <button className="mem-ctx-item" onClick={() => setCtx(null)}>取消</button>
           </div>

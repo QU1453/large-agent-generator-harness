@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import hljs from 'highlight.js'
 import { h, fmtTime } from '../lib/harness.js'
 import SearchSelect from './SearchSelect.jsx'
 import A2AEditor from './A2AEditor.jsx'
@@ -185,6 +186,7 @@ const MINI_H = 116
 
 export default function AgentPanel({ skills, agRunning = false, agRunStates = {}, agNodeOutputs = {}, onRunStart, onToast, onEditSkill, onEditProtocol, onEditMcp }) {
   const [agents, setAgents] = useState([])
+  const [defs, setDefs] = useState([]) // 智能体定义（「智能体」栏）：子智能体节点可选
   const [mode, setMode] = useState('list') // 'list' | 'canvas'
   const [cats, setCats] = useState({ list: [], map: {} })
   const [q, setQ] = useState('')
@@ -202,7 +204,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
   const [canvasSize, setCanvasSize] = useState({ w: 800, h: 600 }) // 画布可视尺寸（跟随窗口 resize）
   const [linkModal, setLinkModal] = useState(null) // 工具/技能链接弹窗 {nodeId, type:'tools'|'skills'}
   const [linkQ, setLinkQ] = useState('') // 链接弹窗搜索关键字
-  const [toolCatalog, setToolCatalog] = useState(null) // {builtin, mcps} 工具数据源（懒加载）
+  const [toolCatalog, setToolCatalog] = useState(null) // {builtin, toolPacks} 工具数据源（懒加载）
   const [memoryList, setMemoryList] = useState([]) // 记忆架构列表（记忆节点用）
   const [protocolList, setProtocolList] = useState([]) // 协议列表（协议节点用）
   // 记忆节点读取/写入接口弹窗
@@ -272,7 +274,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
   }
 
   const doDeleteAgent = async (a) => {
-    if (!confirm(`删除智能体「${a.name}」？\n引用它的子智能体节点将失效。`)) return
+    if (!confirm(`删除工作流「${a.name}」？\n引用它的子智能体节点将失效。`)) return
     try {
       await h.agents.delete(a.id)
       await refreshList()
@@ -314,6 +316,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
       const list = await h.agents.list()
       setAgents(list)
       h.agents.categories().then(setCats).catch(() => {})
+      h.agdefs.list().then(setDefs).catch(() => {})
     })()
     h.memory.list().then(setMemoryList).catch(() => {})
     h.protocols.list().then(setProtocolList).catch(() => {})
@@ -452,7 +455,9 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
       auth: { type: (p.auth && p.auth.type) || 'none', secret: (p.auth && p.auth.secret) || '' },
       access: {
         allowedPeers: Array.isArray(p.access && p.access.allowedPeers) ? [...p.access.allowedPeers] : [],
-        deniedPeers: Array.isArray(p.access && p.access.deniedPeers) ? [...p.access.deniedPeers] : []
+        deniedPeers: Array.isArray(p.access && p.access.deniedPeers) ? [...p.access.deniedPeers] : [],
+        allowedTools: Array.isArray(p.access && p.access.allowedTools) ? [...p.access.allowedTools] : [],
+        deniedTools: Array.isArray(p.access && p.access.deniedTools) ? [...p.access.deniedTools] : []
       },
       audit: p.audit !== false
     })
@@ -490,12 +495,13 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
     updateNode(nodeId, { memories: next })
   }
 
-  // 工具节点 / 上端点：内置工具 + MCP 工具合并为统一工具列表
+  // 工具节点 / 上端点：内置工具 + 工具包工具 + 外部 MCP 工具合并为统一工具列表
   const toolOptions = useMemo(() => {
     if (!toolCatalog) return []
     const out = []
     for (const t of toolCatalog.builtin || []) out.push({ id: t.name, label: t.name, desc: t.description, parameters: t.parameters || null })
-    for (const t of toolCatalog.mcps || []) out.push({ id: `mcp:${t.name}`, label: `mcp:${t.name}`, desc: t.description, mcpId: t.mcpId, parameters: t.parameters || null })
+    for (const t of toolCatalog.toolPacks || []) out.push({ id: `tool:${t.name}`, label: `tool:${t.name}`, desc: t.description, packId: t.packId, parameters: t.parameters || null })
+    for (const t of toolCatalog.external || []) out.push({ id: `ext:${t.name}`, label: `ext:${t.name}`, desc: t.description, packId: t.packId, parameters: t.parameters || null })
     return out
   }, [toolCatalog])
 
@@ -524,11 +530,15 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
   const openToolSource = (n) => {
     const id = n.toolId || ''
     if (!id) { onToast('请先选择一个工具', 'error'); return }
-    if (id.startsWith('mcp:')) {
+    if (id.startsWith('ext:')) {
+      onToast(`外部 MCP 工具「${id.slice(4)}」无本地源码，请在「工具包」页管理`, 'info')
+      return
+    }
+    if (id.startsWith('tool:') || id.startsWith('mcp:')) {
       const t = toolOptions.find((x) => x.id === id)
-      const mcpId = t && t.mcpId
-      if (mcpId && onEditMcp) onEditMcp(mcpId)
-      else onToast('该 MCP 工具源码文件不存在', 'error')
+      const packId = t && t.packId
+      if (packId && onEditMcp) onEditMcp(packId)
+      else onToast('该工具包源码文件不存在', 'error')
     } else {
       onToast(`内置工具「${id}」无独立源码文件，请在节点内编辑操作手册`, 'info')
     }
@@ -865,6 +875,39 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
     setWf((prev) => ({ ...prev, edges: prev.edges.map((ed) => (ed.id === edgeId ? { ...ed, when } : ed)) }))
   }
 
+  // ---- 节点模型配置弹窗（继承上游 / 自定义 baseUrl+apiKey+model）----
+  const [modelModal, setModelModal] = useState(null) // { nodeId, draft }
+  const openModelConfig = (n) => {
+    const m = n.model || {}
+    setModelModal({
+      nodeId: n.id,
+      draft: {
+        inherit: m.inherit !== false, // 默认继承上游
+        baseUrl: m.baseUrl || '',
+        apiKey: m.apiKey || '',
+        model: m.model || ''
+      }
+    })
+  }
+  const patchModelDraft = (patch) => {
+    setModelModal((prev) => prev && { ...prev, draft: { ...prev.draft, ...patch } })
+  }
+  const saveModelConfig = (n) => {
+    const d = modelModal.draft
+    const inherit = d.inherit !== false
+    // 继承时清空自定义字段；自定义时仅保留非空字段
+    const model = inherit
+      ? { inherit: true }
+      : {
+          inherit: false,
+          baseUrl: (d.baseUrl || '').trim(),
+          apiKey: (d.apiKey || '').trim(),
+          model: (d.model || '').trim()
+        }
+    updateNode(n.id, { model })
+    setModelModal(null)
+  }
+
   // ---- 逻辑代码弹窗（图↔代码互转，代码为主、图形回读）----
   const [codeModal, setCodeModal] = useState(null) // { nodeId }
   const [codeText, setCodeText] = useState('')
@@ -1038,7 +1081,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
   }
 
   const removeCurrent = async () => {
-    if (!wf || !confirm(`删除智能体「${wf.name}」？`)) return
+    if (!wf || !confirm(`删除工作流「${wf.name}」？`)) return
     await h.agents.delete(wf.id)
     setWf(null)
     setMode('list')
@@ -1147,31 +1190,31 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
       <div className="panel">
         <div className="panel-header">
           <div>
-            <h2>智能体</h2>
+            <h2>工作流</h2>
             <p className="panel-sub">
-              智能体 = 可视化编排多个技能 / 工具 / 协议 / 记忆 / 子智能体 / 通信总线协作完成复杂任务。
+              工作流 = 可视化编排多个技能 / 工具 / 协议 / 记忆 / 智能体 / 通信总线协作完成复杂任务。
               点卡片进入画布编排
             </p>
           </div>
           <div className="panel-actions">
-            <button className="btn" onClick={createNew}>＋ 新建智能体</button>
-            <button className="btn" onClick={() => setCatModal(true)} title="创建分类文件夹，把智能体归类">📁 新建分类</button>
+            <button className="btn" onClick={createNew}>＋ 新建工作流</button>
+            <button className="btn" onClick={() => setCatModal(true)} title="创建分类文件夹，把工作流归类">📁 新建分类</button>
             <button className="btn ghost" onClick={refreshList}>↻ 刷新</button>
           </div>
         </div>
 
         {agents.length > 0 && (
           <div className="bulk-bar">
-            <input className="input search-input" placeholder="🔍 搜索智能体（名称 / ID / 分类）…" value={q} onChange={(e) => setQ(e.target.value)} />
-            <span className="bulk-count">{agents.length} 个智能体</span>
+            <input className="input search-input" placeholder="🔍 搜索工作流（名称 / ID / 分类）…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <span className="bulk-count">{agents.length} 个工作流</span>
           </div>
         )}
 
         {agents.length === 0 && (
           <div className="workspace-empty">
             <div className="empty-icon">🌀</div>
-            <p>还没有智能体</p>
-            <button className="btn" onClick={createNew}>创建第一个智能体</button>
+            <p>还没有工作流</p>
+            <button className="btn" onClick={createNew}>创建第一个工作流</button>
           </div>
         )}
 
@@ -1198,7 +1241,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                     <div className="session-actions">
                       <select
                         className="skill-cat-select"
-                        title="智能体分类文件夹"
+                        title="工作流分类文件夹"
                         value={a.category || '未分类'}
                         onChange={(e) => { const v = e.target.value; if (v === '__new__') setCatModal(true); else changeAgentCategory(a, v) }}
                         onClick={(e) => e.stopPropagation()}
@@ -1225,7 +1268,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
             <div className="mem-ctx" style={{ left: cardMenu.x, top: cardMenu.y }}>
               <div className="mem-ctx-title">🌀 {cardMenu.a.name}</div>
               <button className="mem-ctx-item" onClick={() => { const a = cardMenu.a; setCardMenu(null); loadAgent(a.id) }}>🕸 打开画布</button>
-              <button className="mem-ctx-item danger" onClick={() => { const a = cardMenu.a; setCardMenu(null); doDeleteAgent(a) }}>🗑 删除智能体</button>
+              <button className="mem-ctx-item danger" onClick={() => { const a = cardMenu.a; setCardMenu(null); doDeleteAgent(a) }}>🗑 删除工作流</button>
               <button className="mem-ctx-item" onClick={() => setCardMenu(null)}>取消</button>
             </div>
           </div>
@@ -1250,27 +1293,27 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
             className="input wf-name-input"
             value={wf?.name || ''}
             onChange={(e) => setWf((prev) => prev && { ...prev, name: e.target.value })}
-            placeholder="智能体名称"
+            placeholder="工作流名称"
           />
           <SearchSelect
             className="wf-switch-select"
-            items={agents.map((w) => ({ id: w.id, label: w.name, desc: `${w.nodeCount || 0} 个节点`, icon: '🌀', keywords: `智能体 ${w.id}` }))}
+            items={agents.map((w) => ({ id: w.id, label: w.name, desc: `${w.nodeCount || 0} 个节点`, icon: '🌀', keywords: `工作流 ${w.id}` }))}
             value={wf?.id || ''}
             onChange={loadAgent}
-            placeholder="🔍 搜索智能体…"
-            empty="无匹配智能体"
+            placeholder="🔍 搜索工作流…"
+            empty="无匹配工作流"
           />
         </div>
         <div className="panel-actions wf-actions">
-          <button className="btn ghost" onClick={() => { setWf(null); setMode('list'); refreshList() }} title="返回智能体列表">← 返回</button>
-          <button className="btn ghost" onClick={createNew} title="新建智能体">＋ 新建</button>
+          <button className="btn ghost" onClick={() => { setWf(null); setMode('list'); refreshList() }} title="返回工作流列表">← 返回</button>
+          <button className="btn ghost" onClick={createNew} title="新建工作流">＋ 新建</button>
           <button className="btn ghost" onClick={() => setTemplateModal(true)} title="从模板生成多智能体画布">🧩 模板</button>
           <button className="btn ghost" onClick={save} title="保存">💾 保存</button>
           <button className="btn ghost danger" onClick={removeCurrent} title="删除">🗑</button>
           <button
             className="btn"
             onClick={() => setEx({ name: wf?.name || '', desc: '', target: 'all', busy: false, result: null })}
-            title="把此智能体导出为大型 Agent 包（LAG）"
+            title="把此工作流导出为大型 Agent 包（LAG）"
           >📦 导出为 Agent</button>
           <label className="wf-canvas-size" title="画布尺寸（宽 × 高，节点超出会自动扩展）">
             <span>画布</span>
@@ -1385,6 +1428,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                 <div className="wf-node-head" data-drag-node={n.id}>
                   <span className="wf-node-icon">{n.type === 'custom' ? (n.icon || '🧩') : meta.icon}</span>
                   <span className="wf-node-title">{n.type === 'custom' ? (n.label || '自定义模块') : meta.name}</span>
+                  {n.model && n.model.inherit === false && <span className="wf-model-badge" title="自定义模型配置（右键节点 → 模型配置）">⚙模型</span>}
                   {state && state.status === 'running' && <span className="wf-spinner" />}
                   {state && state.status === 'done' && <span className="wf-ok">✓</span>}
                   {state && state.status === 'error' && <span className="wf-err" title={state.error}>✕</span>}
@@ -1445,15 +1489,16 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                       <SearchSelect
                         className="wf-agent-select"
                         items={[
-                          ...agents.filter((w) => w.id !== wf.id).map((w) => ({ id: w.id, label: w.name, desc: `${w.nodeCount || 0} 个节点`, icon: '🔄', keywords: `子智能体 ${w.id}` }))
+                          ...agents.filter((w) => w.id !== wf.id).map((w) => ({ id: w.id, label: w.name, desc: `工作流 · ${w.nodeCount || 0} 个节点`, icon: '🕸', keywords: `子智能体 工作流 ${w.id}` })),
+                          ...defs.map((d) => ({ id: d.id, label: d.name, desc: `智能体 · ${d.skillCount || 0} 个技能${d.model && d.model.inherit === false ? ' · 自定义模型' : ''}`, icon: '🤖', keywords: `智能体 ${d.id}` }))
                         ]}
                         value={n.subagentId || ''}
                         onChange={(id) => updateNode(n.id, { subagentId: id })}
-                        placeholder="🔍 选择子智能体…"
+                        placeholder="🔍 选择子智能体 / 智能体…"
                         empty="无匹配智能体"
                       />
                       <div className="wf-subflow-hint">
-                        上游内容将作为输入灌入子智能体，子智能体最终输出作为本节点输出
+                        上游内容将作为输入灌入子智能体，子智能体最终输出作为本节点输出（可引用「智能体」栏的单智能体）
                       </div>
                     </>
                   )}
@@ -1623,7 +1668,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                         value={n.mode || 'mcp'}
                         onChange={(e) => updateNode(n.id, { mode: e.target.value })}
                       >
-                        <option value="mcp">🔧 MCP / 内置工具（供下游智能体调用）</option>
+                        <option value="mcp">🔧 工具包 / 内置工具（供下游智能体调用）</option>
                         <option value="inline">🐍 内联 Python（直接处理输入）</option>
                       </select>
                       {n.mode === 'inline' ? (
@@ -1640,7 +1685,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                             items={toolOptions.map((t) => ({ id: t.id, label: t.label, desc: t.desc || '', icon: '🔧', keywords: `工具 ${t.id}` }))}
                             value={n.toolId || ''}
                             onChange={(id) => updateNode(n.id, { toolId: id, manual: '' })}
-                            placeholder="🔍 搜索工具（内置 + MCP）…"
+                            placeholder="🔍 搜索工具（内置 + 工具包）…"
                             empty="无匹配工具"
                           />
                           <textarea
@@ -1764,6 +1809,9 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                 {multi && (
                   <button className="wf-ctxmenu-item danger" onClick={deleteSelectedNodes}>🗑 删除选中 {selectedNodes.size} 个节点</button>
                 )}
+                <button className="wf-ctxmenu-item" onClick={() => { setCtxMenu(null); openModelConfig(node) }}>
+                  🤖 模型配置{node.model && node.model.inherit === false ? '（自定义）' : '（继承上游）'}
+                </button>
                 <button className="wf-ctxmenu-item danger" onClick={() => removeNode(node.id)}>🗑 删除节点</button>
                 <button className="wf-ctxmenu-item" onClick={() => removeNodeEdges(node.id)}>🔌 断开全部连线</button>
                 <button className="wf-ctxmenu-item" onClick={() => setCtxMenu(null)}>取消</button>
@@ -1836,16 +1884,97 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                 </div>
                 <div className="modal-body">
                   <div className="code-modal-hint">图形 = 代码的视图：保存后 `# 字段:` 元注释会回写到节点属性（代码为主，双向回读）</div>
-                  <textarea
-                    className="code-modal-ta"
-                    value={codeText}
-                    onChange={(e) => setCodeText(e.target.value)}
-                    spellCheck={false}
-                  />
+                  <div className="code-editor native code-modal-editor">
+                    <pre
+                      className="code-highlight"
+                      aria-hidden="true"
+                      dangerouslySetInnerHTML={{
+                        __html: hljs.highlight(codeText || '', { language: 'python' }).value + '\n'
+                      }}
+                    />
+                    <textarea
+                      className="code-input"
+                      value={codeText}
+                      onChange={(e) => setCodeText(e.target.value)}
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      data-gramm={false}
+                    />
+                  </div>
                 </div>
                 <div className="modal-footer">
                   <button className="btn" onClick={() => setCodeModal(null)}>取消</button>
                   <button className="btn primary" onClick={() => saveNodeCode(cn)}>保存并回写</button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* 节点模型配置弹窗：继承上游或自定义 baseUrl/apiKey/model */}
+        {modelModal && wf && (() => {
+          const mn = wf.nodes.find((x) => x.id === modelModal.nodeId)
+          if (!mn) return null
+          const d = modelModal.draft
+          return (
+            <div className="modal-overlay" onClick={() => setModelModal(null)}>
+              <div className="modal model-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h2>🤖 模型配置 · {mn.label || mn.type}</h2>
+                  <button className="icon-btn" onClick={() => setModelModal(null)}>✕</button>
+                </div>
+                <div className="modal-body">
+                  <div className="code-modal-hint">继承 = 跟随上游/全局模型的 URL 与 API Key；自定义 = 本节点用自己的模型配置（导出后不含密钥，运行前通过配置接口注入）</div>
+                  <label className="model-inherit-row">
+                    <input
+                      type="checkbox"
+                      checked={d.inherit}
+                      onChange={(e) => patchModelDraft({ inherit: e.target.checked })}
+                    />
+                    继承上游智能体的模型（URL + API）
+                  </label>
+                  {!d.inherit && (
+                    <div className="model-fields">
+                      <div className="model-field">
+                        <span className="model-field-label">Base URL</span>
+                        <input
+                          className="wf-edge-when"
+                          style={{ margin: 0 }}
+                          placeholder="https://api.deepseek.com/v1"
+                          value={d.baseUrl}
+                          onChange={(e) => patchModelDraft({ baseUrl: e.target.value })}
+                        />
+                      </div>
+                      <div className="model-field">
+                        <span className="model-field-label">API Key</span>
+                        <input
+                          className="wf-edge-when"
+                          style={{ margin: 0 }}
+                          type="password"
+                          placeholder="sk-..."
+                          value={d.apiKey}
+                          onChange={(e) => patchModelDraft({ apiKey: e.target.value })}
+                        />
+                      </div>
+                      <div className="model-field">
+                        <span className="model-field-label">模型名</span>
+                        <input
+                          className="wf-edge-when"
+                          style={{ margin: 0 }}
+                          placeholder="deepseek-chat"
+                          value={d.model}
+                          onChange={(e) => patchModelDraft({ model: e.target.value })}
+                        />
+                      </div>
+                      <div className="code-modal-hint">字段留空时回落上游对应的值（只覆盖填了的部分）</div>
+                    </div>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  <button className="btn" onClick={() => setModelModal(null)}>取消</button>
+                  <button className="btn primary" onClick={() => saveModelConfig(mn)}>保存</button>
                 </div>
               </div>
             </div>
@@ -2004,23 +2133,24 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                           </label>
                         ))}
                       </div>
-                      <div className="wf-link-group-title">MCP 工具</div>
-                      {toolCatalog.mcps.length === 0 && <div className="wf-link-empty">暂无 MCP 工具（可在「工具」页创建）</div>}
+                      <div className="wf-link-group-title">工具包工具</div>
+                      {!toolCatalog.toolPacks || toolCatalog.toolPacks.length === 0 ? <div className="wf-link-empty">暂无工具包工具（可在「工具包」页创建）</div> : (
                       <div className="wf-link-list">
-                        {toolCatalog.mcps
+                        {toolCatalog.toolPacks
                           .filter((t) => !linkQ.trim() || `${t.name} ${t.description || ''}`.toLowerCase().includes(linkQ.trim().toLowerCase()))
                           .map((t) => (
                           <label key={t.name} className="wf-link-item">
                             <input
                               type="checkbox"
-                              checked={linked(linkNode?.tools).includes('mcp:' + t.name)}
-                              onChange={() => toggleNodeTool(linkNode.id, 'mcp:' + t.name)}
+                              checked={linked(linkNode?.tools).includes('tool:' + t.name) || linked(linkNode?.tools).includes('mcp:' + t.name)}
+                              onChange={() => toggleNodeTool(linkNode.id, 'tool:' + t.name)}
                             />
-                            <span className="wf-link-name">mcp:{t.name}</span>
-                            <span className="wf-link-desc">{t.description || t.mcpId}</span>
+                            <span className="wf-link-name">tool:{t.name}</span>
+                            <span className="wf-link-desc">{t.description || t.packId}</span>
                           </label>
                         ))}
                       </div>
+                      )}
                     </>
                   )}
                 </div>

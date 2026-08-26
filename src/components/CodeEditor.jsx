@@ -4,13 +4,13 @@ import { h } from '../lib/harness.js'
 
 const LANGS = {
   skill: 'javascript',
-  mcp: 'javascript',
+  toolPack: 'javascript',
   protocol: 'python'
 }
 
 const LABELS = {
   skill: { icon: '🤖', name: '技能' },
-  mcp: { icon: '🔧', name: '工具' },
+  toolPack: { icon: '🔧', name: '工具' },
   protocol: { icon: '🔐', name: '协议' }
 }
 
@@ -33,7 +33,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
   const [running, setRunning] = useState(false)
   const [runOut, setRunOut] = useState(null) // {ok, ...} 运行输出
   const [testOpen, setTestOpen] = useState(false)
-  const [mcpTools, setMcpTools] = useState([]) // 当前 MCP 的工具（含 parameters）
+  const [mcpTools, setMcpTools] = useState([]) // 当前工具包的工具（含 parameters）
   const [selTool, setSelTool] = useState('')
   const [argsText, setArgsText] = useState('{}')
 
@@ -45,7 +45,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
         if (kind === 'protocol') {
           data = await h.protocols.read(id)
         } else {
-          const api = kind === 'skill' ? h.skills : h.mcps
+          const api = kind === 'skill' ? h.skills : h.toolPacks
           data = file ? await api.readFile(file) : await api.read(id)
         }
         if (!data) throw new Error('文件不存在')
@@ -59,7 +59,23 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
     })()
   }, [kind, id, file])
 
-  const lang = filePath.toLowerCase().endsWith('.py') ? 'python' : LANGS[kind] || 'javascript'
+  // 语言推断：按扩展名识别 py/c/cpp/js/ts/json/md 等；无扩展名回落到 kind 映射
+  const inferLang = (fp, k) => {
+    const ext = (String(fp || '').toLowerCase().split('.').pop() || '')
+    const map = {
+      py: 'python', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+      js: 'javascript', mjs: 'javascript', jsx: 'javascript', cjs: 'javascript',
+      ts: 'typescript', tsx: 'typescript',
+      json: 'json', md: 'markdown', html: 'xml', htm: 'xml', css: 'css',
+      sh: 'bash', bat: 'dos', ps1: 'powershell', yml: 'yaml', yaml: 'yaml',
+      toml: 'ini', ini: 'ini', sql: 'sql', go: 'go', rs: 'rust', java: 'java',
+      skill: 'javascript', tool: 'javascript', protocol: 'python'
+    }
+    if (map[ext]) return map[ext]
+    if (/^[\w-]+$/.test(ext) && ext.length <= 12) return map[ext] || 'plaintext'
+    return LANGS[k] || 'javascript'
+  }
+  const lang = inferLang(filePath, kind)
 
   // 高亮层：把代码渲染为带 <span class="hljs-*"> 的 HTML（与 textarea 透明文字叠加）
   const highlighted = useMemo(() => {
@@ -86,7 +102,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
       if (kind === 'protocol') {
         r = await h.protocols.write(id, code)
       } else {
-        const api = kind === 'skill' ? h.skills : h.mcps
+        const api = kind === 'skill' ? h.skills : h.toolPacks
         r = file ? await api.writeFile(file, code) : await api.write(id, code)
       }
       if (!r || (r.ok === false)) throw new Error('保存失败')
@@ -110,7 +126,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
   const loadMcpTools = async () => {
     try {
       const t = await h.tools.list()
-      const list = (t.mcps || []).filter((x) => x.mcpId === id)
+      const list = (t.toolPacks || []).filter((x) => x.packId === id)
       setMcpTools(list)
       if (list.length && !selTool) setSelTool(list[0].name)
       if (!list.length) setRunOut({ ok: false, error: '该工具包当前没有可测试的工具（保存重载后再试）' })
@@ -138,7 +154,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
     setRunning(true); setRunOut(null)
     try {
       if (dirty) await save()
-      setRunOut({ ok: true, value: await h.mcps.runTool(selTool, args) })
+      setRunOut({ ok: true, value: await h.toolPacks.runTool(selTool, args) })
     } catch (e) {
       setRunOut({ ok: false, error: e.message || String(e) })
     } finally {
@@ -213,7 +229,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
           </div>
         )}
 
-        {(kind === 'protocol' || kind === 'mcp') && (
+        {(kind === 'protocol' || kind === 'toolPack') && (
           <div className="editor-run">
             <div className="editor-run-bar">
               {kind === 'protocol' ? (
@@ -228,7 +244,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
               {kind === 'protocol' && <span className="editor-run-hint">用 Python 执行 .protocol.py，验证语法并回显解析出的配置</span>}
             </div>
 
-            {kind === 'mcp' && testOpen && (
+            {kind === 'toolPack' && testOpen && (
               <div className="editor-test">
                 <select className="input editor-test-sel" value={selTool} onChange={(e) => setSelTool(e.target.value)}>
                   {mcpTools.length === 0 && <option value="">（无工具）</option>}

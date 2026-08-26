@@ -41,6 +41,12 @@
   .cfg-actions { display: flex; gap: 10px; margin-top: 20px; }
   .cfg-actions button { flex: 1; }
   .cfg-done { color: #4ade80; font-size: 13px; margin-top: 12px; display: none; }
+  .ag-row { border: 1px solid #262a35; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+  .ag-row h4 { font-size: 13px; color: #c7cbd6; margin-bottom: 8px; font-weight: 600; word-break: break-all; }
+  .ag-row h4 code { color: #8b90a0; font-size: 11px; }
+  .ag-row h4 em { font-style: normal; font-size: 11px; color: #f5b84c; }
+  .ag-row .cfg-field { margin-bottom: 8px; }
+  .ag-row .cfg-field input { padding: 8px 10px; font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -57,6 +63,10 @@
       <input id="cfgKey" type="password" placeholder="sk-..." spellcheck="false" /></label>
     <label class="cfg-field"><span>模型</span>
       <input id="cfgModel" placeholder="deepseek-v4-flash" spellcheck="false" /></label>
+    <div id="cfgAgentsWrap" style="display:none">
+      <p class="cfg-hint" style="margin:14px 0 10px">智能体级模型（可选）：导出物不含任何密钥。可在这里给<strong>全局</strong>或<strong>某个智能体</strong>单独注入 URL / API，该智能体运行时优先使用它自己的配置；留空 = 跟随全局。</p>
+      <div id="cfgAgents"></div>
+    </div>
     <div class="cfg-actions">
       <button id="cfgCancel" class="ghost">取消</button>
       <button id="cfgSave">保存并开始对话</button>
@@ -102,22 +112,50 @@ async function loadConfig() {
     $('#cfgKey').value = ''
     $('#cfgKey').placeholder = data.hasKey ? '已保存（留空保持不变）' : 'sk-...'
     $('#cfgCancel').style.display = cfgOk ? 'block' : 'none'
+    renderAgents(data.agents || [])
     if (cfgOk) $('#inp').focus()
   } catch (e) {
     add('err', '无法连接服务: ' + String(e.message || e))
   }
 }
+function renderAgents(agents) {
+  const wrap = $('#cfgAgentsWrap')
+  const box = $('#cfgAgents')
+  box.innerHTML = ''
+  if (!agents.length) { wrap.style.display = 'none'; return }
+  wrap.style.display = 'block'
+  agents.forEach((a) => {
+    const row = document.createElement('div')
+    row.className = 'ag-row'
+    row.dataset.agId = a.id
+    row.innerHTML =
+      '<h4>' + a.label + ' <code>' + a.id + '</code>' + (a.custom ? ' <em>自定义模型</em>' : '') + '</h4>' +
+      '<label class="cfg-field"><span>Base URL</span><input class="ag-url" placeholder="https://api.deepseek.com/v1" spellcheck="false" /></label>' +
+      '<label class="cfg-field"><span>API Key</span><input class="ag-key" type="password" placeholder="留空 = 跟随全局" spellcheck="false" /></label>' +
+      '<label class="cfg-field"><span>模型</span><input class="ag-model" placeholder="留空 = 跟随全局" spellcheck="false" /></label>'
+    box.appendChild(row)
+  })
+}
 async function saveConfig() {
   const btn = $('#cfgSave')
   btn.disabled = true
   try {
+    const agentsMap = {}
+    document.querySelectorAll('.ag-row').forEach((row) => {
+      const id = row.dataset.agId
+      const url = row.querySelector('.ag-url').value.trim()
+      const key = row.querySelector('.ag-key').value.trim()
+      const model = row.querySelector('.ag-model').value.trim()
+      if (url || key || model) agentsMap[id] = { base_url: url, api_key: key, model: model }
+    })
     const res = await fetch('/v1/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         base_url: $('#cfgUrl').value.trim(),
         api_key: $('#cfgKey').value.trim(),
-        model: $('#cfgModel').value.trim()
+        model: $('#cfgModel').value.trim(),
+        agents: agentsMap
       })
     })
     const data = await res.json()

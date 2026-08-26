@@ -217,6 +217,18 @@ URL：http://127.0.0.1:37800/mcp/sse
 | **P1 多智能体协同** | 通信总线挂接 + 4 种连线 + 回调回环 + 命名统一 | ✅ 已完成 |
 | **P2 半图形化** | 控制流节点 + 边分支条件 + 内联 Python + 图↔代码互转 | ✅ 已完成 |
 | **P3 自定义化** | 模板库 + 自定义模块 | ✅ 已完成 |
+| **N1 模型体系** | 画布节点模型配置（继承上游/自定义 URL+API+模型名）+ 侧栏拆分「工作流/智能体」（智能体=单智能体：模型/提示词/技能）+ 导出配置注入接口（/api/config，导出绝不含密钥） | ✅ 已完成 |
+| **N2 工具包命名** | 内部工具包去 MCP 化：`mcp:`→`tool:`、`mcp_`→`tool_`、`.mcp.*`→`.tool.*`、目录 mcps→tool-packs、面板「工具/MCP」→「工具包」；标准 MCP Server（对外）保留原名；读取兼容旧名、启动时一次性迁移旧数据 | ✅ 已完成 |
+| **N3 外部 MCP** | Harness 作为 MCP 客户端接入外部 MCP Server（stdio 本地命令 / http Streamable），工具以 `ext_` 前缀并入 LLM 与画布工具节点；工具包面板「🌐 外部 MCP」管理（增删改/连接状态） | ✅ 已完成 |
+| **N4 文件重命名** | 技能文件树 / 记忆文件树右键「✏ 重命名」（主组件/受保护文件不可改名，可读性记录迁移，无扩展名补 .md） | ✅ 已完成 |
+| **N5 语法高亮** | VS Code Dark+ 风格 hljs token 配色（关键字/字符串/注释/数字/函数等分色）；按扩展名推断语言（py/c/cpp/js/ts/json…）；画布逻辑代码弹窗同享高亮 | ✅ 已完成 |
+| **P4-1 工具管道** | 工具执行中间件（pre/post-execute）+ 审计统一落盘 + 工具调用自动入记忆账本 + A2A 工具级访问控制 | ✅ 已完成 |
+| **P4-2 模型可见即记录** | LLM 请求审计日志（llm.jsonl，可重建模型所见） | ⬜ 未开始 |
+| **P4-3 运行前预检** | checkAgent 预检复用到画布「运行」前（错误阻止+警告提示） | ⬜ 未开始 |
+| **P4-4 导出加强** | 固化真实记忆 + 导出包运行日志 + web 控制台升级 + zip 一键分发 | ⬜ 未开始 |
+| **P4-5 LLM Provider** | llm.js 抽象 provider（openai-compatible / anthropic / ollama） | ⬜ 未开始 |
+| **P4-6 快照测试** | keyless 快照回归（scripts/check.mjs 一键门禁） | ⬜ 未开始 |
+| **P4-7 工具呈现** | 工具结果渲染类型（text/diff/table/json） | ⬜ 未开始 |
 | **PID 场景** | 串口协议 + 电机工具 + 三层记忆 + 技能入记忆卡片 + when-to-use 接口描述 | ✅ 已完成（仿真闭环可跑，真机需 pyserial + 改 MODE） |
 | **W1 工作区基础** | ⑭ 内嵌编辑器 ✅；⑮ 全局搜索；⑯ `.harnessignore`；⑰ 面包屑/双击打开 | 🔶 部分：⑭ 已完成 |
 | **W2 工作区编辑器** | ⑱ 多标签页；⑲ Diff 视图；⑳ 图片/Markdown 预览；㉑ 文件复制/粘贴/移动 | ⬜ 未开始 |
@@ -317,3 +329,151 @@ URL：http://127.0.0.1:37800/mcp/sse
 - W3（Git 集成/代码索引）是 T1 前置；T2 依赖 LAG 导出器序列化契约；
 - 记忆（第四节）作为项目级能力随工作区共享；
 - 实时协同（T3）工作量最大，放最后。
+
+---
+
+## 十二、P4 深化规划（借鉴 DeepSeek Harness）
+
+> 依据：`DeepSeek-Harness-架构研究报告.md`（2026-08-25 版）。只借鉴**能直接落到现有代码**的模式；完整插件框架 / 覆盖率门禁 / Profile yaml / JSON-RPC SDK / 双聚合 TS 明确不照搬（见 12.8）。
+> 决策记录：P4-4 原方案「JSON 场景包」经评审改为**只加强 Python 导出**（部署走现有「导出为 Agent」Python 包，T2 资产共享已覆盖 JSON 资产包，不再做 JSON 场景包）。
+
+### 12.1 P4-1 工具执行管道（中间件链）— 高价值 · 低中成本
+
+**借鉴**：DS 工具走 `tools/pre-execute → tools/execute → tools/post-execute` 三段 waterfall，可拦截/包装/富化。
+
+**现状**：`electron/tools.js` 的 `execTool` 是直接 switch 分发，无任何钩子。
+
+**做法**：
+- `execTool` 加注册式中间件：`tools.hook('pre-execute', fn)` / `tools.hook('post-execute', fn)`（注册即 Effect，返回注销函数）；
+- 三个内置消费者已落地：**审计**（main.js 启动时 `tools.installAudit()`，所有工具调用写 `data/audit/tools.jsonl`，含 sessionId/agentId/nodeId/skillId/耗时）；**记忆**（节点绑定记忆架构时，工具调用自动记入该记忆空间 ledger 账本溯源，跳过自记账本的 memory_* 工具）；**A2A**（协议新增 `allowedTools`/`deniedTools`，pre-execute 拒绝，节点卡片 A2A 编辑器可配）。
+- 管道路径：`chat.js → llm.execTool → tools.execTool`（LLM 驱动的工具调用唯一入口；MCP Server 直调能力属设计内，不走管道）。
+
+**收益**：权限控制、审计、调用记录全部收口到一条管道；后续"调用前询问确认"类交互也在管道上加。
+
+### 12.2 P4-2 模型可见即记录 — 高价值 · 低成本
+
+**借鉴**："到达模型的任何内容都必须能从会话日志重建"（Model-visible ⟺ logged）。
+
+**做法**：`chat.js` 的 `runChat` 每次 LLM 请求写一条 `data/audit/llm.jsonl`：会话 id、节点/技能 id、**resolve 后的模型配置（含继承链路）**、messages 摘要、工具 schemas、返回内容。配合 N1 的节点模型继承/自定义，可精确复现"某个节点实际用了哪套 URL/API、模型看到了什么"。
+
+### 12.3 P4-3 运行前预检（误导配置立即失败）— 中高价值 · 低成本
+
+**借鉴**：加载时能自检的错误立即失败，从不静默跳过缺失引用。
+
+**现状**：`exporter.js` 的 `checkAgent` 已有完整预检（技能/工具/子智能体/记忆引用），但只在导出时跑。
+
+**做法**：预检提取为共享模块，画布「▶ 运行」前先跑：错误阻止运行并标红节点，警告 toast；节点模型配置了自定义 URL/API 但为空时运行前报错，而非运行中静默回落。
+
+### 12.4 P4-4 导出加强（只加强 Python 导出）— 中高价值 · 中成本
+
+在现有导出管线（`exporter.js` + `electron/export-template/`）上加强：
+
+| # | 项 | 说明 |
+|---|---|---|
+| 1 | **固化真实记忆** | 现在导出只带记忆骨架；加强为把工作流引用的记忆架构真实内容（policy/facts/episodes + pid-memory lessons.db 经验）固化进包内 `memory/`，部署即带经验 |
+| 2 | **导出包运行日志** | 导出物运行时把每次 LLM 请求 + 工具调用写 `data/audit/llm.jsonl`（P4-2 落地到 Python 端） |
+| 3 | **web 控制台升级** | 加会话历史 / 工具调用日志 / 节点级输出查看（配合已有 /api/config 注入接口） |
+| 4 | **zip 一键分发** | 导出成功后自动打成 zip 方便拷走 |
+
+### 12.5 P4-5 LLM Provider 能力缝 — 中价值 · 中成本
+
+**借鉴**：能力缝三角色（Service Definition / Provider / Consumer），provider 可替换。
+
+**现状**：`llm.js` 的 `streamChat` 已是接口（baseUrl/apiKey/model 注入），但只支持 OpenAI 兼容格式。
+
+**做法**：settings 与节点模型配置加 `provider` 字段：`openai-compatible`（现状）/ `anthropic` / `ollama`；llm.js 按 provider 组装请求格式。使节点级自定义模型能接任意厂商。
+
+### 12.6 P4-6 无密钥快照测试 — 中价值 · 中成本
+
+**借鉴**：keyless snapshot 回放（`DSH_SNAPSHOT=replay/record/refresh`），CI 无需 API key。
+
+**做法**：把现有 `m-p*.mjs` / `e2e-*.mjs` 整理为 `scripts/check.mjs` 一键门禁，两类：
+- **无 LLM 部分**（拓扑排序、区域权限、控制流、导出清洗、模型继承解析）：直接断言，零 key；
+- **LLM 部分**：录一次真实请求/响应 fixture（脱敏），回放时 mock `llm.streamChat`。
+
+### 12.7 P4-7 工具呈现 — 低价值 · 放最后
+
+**借鉴**：工具结果渲染意图（generic / terminal / diff / locations）。
+
+**做法**：画布节点输出按工具/技能结果的 `render` 类型渲染（diff 高亮、JSON 树、表格），纯视觉收益。
+
+### 12.8 明确不照搬
+
+| 项 | 理由 |
+|---|---|
+| Cordis 插件框架 / DI / Fiber | 单体规模，重排生命周期负收益；MCP 工具 + 自定义模块已覆盖插件诉求 |
+| 100% 每文件覆盖率门禁 | 个人项目成本远大于收益 |
+| Profile / cordis.patch.yml 组合层 | 用 P4-4 导出加强替代；团队共享走 T2 JSON 资产包 |
+| JSON-RPC SDK + Python SDK | 已有 Python 导出引擎 + MCP Server，无需新协议 |
+| 双聚合 TypeScript | JS/React 无 Context 声明合并问题 |
+| Turn/Step 事件模型重构 | 现有 callback 回环 + MAX_ROUNDS 已覆盖 |
+
+### 12.9 执行顺序
+
+P4-1 → P4-2 → P4-3（骨架）→ P4-4 → P4-5 → P4-6 → P4-7。
+
+---
+
+## 十三、N3/N4/N5 开发文档（3 项新需求，代码已落地，剩验证+打包）
+
+> 决策：内部工具包（N2 已改名，自研声明格式）与外部 MCP（标准 MCP 协议）**并存**——Harness 作为 MCP 客户端接入 GitHub 等外部 MCP Server；另补文件右键重命名与代码语法高亮。
+>
+> **状态**：三项功能**代码均已实现并入库**（未提交），剩余工作 = 语法检查 + 前端构建 + 打包 release exe + e2e 验证。
+
+### 13.1 N3 外部 MCP 接入（Harness = MCP 客户端）
+
+**目标**：在「工具包」面板接入外部 MCP Server（标准 MCP 协议），其工具导入后供智能体调用（例：GitHub MCP）。
+
+**支持两种传输**：
+| 类型 | 接入方式 | 例 |
+|---|---|---|
+| stdio | 本地命令启动（`command [args]`） | `npx @modelcontextprotocol/server-github` |
+| http | 远程 URL（Streamable HTTP `/mcp` 或 SSE `/mcp/sse`） | `http://127.0.0.1:37800/mcp/sse`（连 Harness 自己也行） |
+
+**已落地实现**：
+- **`electron/mcp-client.js`（新）**：`MCPConnection` 类（`connect()` 初始化 stdio/http 传输 → `initialize` 能力协商（协议版本 `2025-03-26`）→ `notifications/initialized` → `tools/list` → 提取 `{name, description, parameters(inputSchema)}`；`_request()` JSON-RPC 请求、`_notify()`、`execTool()` 提取文本内容）。对外 API：`init / reload / list / add / update / remove / allTools / execTool / stopAll`。配置存 `data/external-mcps.json`：`{id, name, type, command, args[], url, headers?, enabled}`。超时 15s；http 走 `net.fetch`（自动走系统代理 127.0.0.1:7897）；工具名 `ext_` 前缀隔离。
+- **`electron/tools.js`**：`execTool` 增加 `ext_` 前缀分发（`name.startsWith('ext_')` → `mcpClient.execTool(name.slice(4), args)`）。
+- **`electron/llm.js`**：`getToolSchemas` 合并外部 MCP 工具（`allTools().map(→ name: 'ext_' + t.name)`），全部启用供 LLM 调用。
+- **`electron/main.js`**：`externalMcps.init()`（启动连接 enabled 外部 MCP，失败不阻塞启动）；IPC `extmcps:list/add/update/delete/reload`；`before-quit` 调 `externalMcps.stopAll()`；`tools:list` 返回含 `external` 字段。
+- **`electron/preload.js`**：暴露 `h.extMcps`（`list/add/update/delete/reload`）。
+- **`src/components/ToolPacksPanel.jsx`**：「🌐 外部 MCP」按钮 + 新建/编辑弹窗（名称/类型 stdio|http/命令或 URL/启用开关/保存并连接）+ 外部 MCP 独立分组卡片（状态：已连接/连接失败/已停用，显示工具数）+ 右键菜单（编辑/重新连接/删除）。
+- **`src/styles.css`**：`.mcp-card.ext` 外部 MCP 卡片样式。
+- **`src/components/AgentPanel.jsx`**：`toolOptions` 合并外部工具 `ext:${t.name}`；`openToolSource` 对 `ext:` 提示"无本地源码"。
+
+**安全底线**：外部 MCP 工具**不进导出包**（导出只含 `.tool.py` 内部工具）；工具名前缀 `ext_` 隔离避免与内部冲突。
+
+### 13.2 N4 文件右键重命名
+
+**目标**：所有文件树支持右键「重命名」。现状：工作区文件树已有（`workspace:rename`）；**技能文件树、记忆文件树补齐**。
+
+**已落地实现**：
+- **`electron/skills.js`**：`renameFile(id, oldRel, newRel)`——主组件 `main` 不可改名；路径越界校验；无扩展名自动补 `.md`；目标已存在报错；迁移 `.skill-file-perms.json` 可读性记录。
+- **`electron/memory.js`**：`renameFile(name, oldRel, newRel)`——受保护文件不可改名；目标不得与内置核心文件重名；无扩展名补 `.md`。
+- **`electron/main.js`**：IPC `skills:rename-file`、`memory:rename-file`。
+- **`electron/preload.js`**：`h.skills.renameFile`、`h.memory.renameFile`。
+- **`src/components/SkillPanel.jsx`**：文件树右键菜单「✏ 重命名」（`main` 禁用）+ 重命名弹窗（输入新文件名，Enter 确认）；改名后若正打开则跟随。
+- **`src/components/MemoryPanel.jsx`**：同上（受保护文件禁用）。
+
+### 13.3 N5 代码语法高亮（vscode 风格）
+
+**目标**：代码文件（python/c/c++/js 等）编辑时对不同作用字符（变量/关键字/字符串/注释…）用不同颜色，观感接近 vscode。
+
+**已落地实现**：
+- **`src/styles.css`**：vscode-dark 风格 hljs token 配色（关键字 `#569cd6`、字符串 `#ce9178`、注释 `#6a9955` 斜体、数字 `#b5cea8`、函数标题 `#dcdcaa`、类型 `#4ec9b0` 等），作用于 `.code-editor.native .code-highlight .hljs-*` 并覆盖 `.markdown-body pre` 代码块；`.code-modal-editor` 样式。
+- **`src/components/CodeEditor.jsx`**：`LANGS` 语言映射含 `python/c/cpp/javascript`；非技能文件按扩展名推断语言（`py/c/h/cpp/cc/cxx/hpp/js/mjs/jsx/cjs/…`）。
+- **`src/components/AgentPanel.jsx` / `WorkspacePanel.jsx`**：画布「逻辑代码」弹窗复用 `.code-modal-editor` 高亮层（pre + 透明 textarea 叠加）。
+
+### 13.4 实施顺序与验证计划
+
+**顺序**：N5（配色，快）→ N4（重命名，中）→ N3（外部 MCP，大）——**均已实施**。
+
+**剩余工作（本次动工）**：
+1. `node --check` 全部改动的 electron 后端脚本
+2. `npm run build` 前端构建（React 无编译错误）
+3. e2e 验证：技能文件树/记忆文件树重命名；代码编辑高亮配色；外部 MCP（mock stdio server）add→connect→tools/list→execTool→update→delete
+4. 停 LAG harness 进程 → 打包 release（`release\win-unpacked\LAG harness.exe`）→ 启动验证
+5. 更新 GitHub 仓库（含 ignore 保护，不含任何 api key 文件）
+
+---
+
+

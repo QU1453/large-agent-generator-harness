@@ -76,7 +76,7 @@
     <h3>🛠 工具</h3><ul id="tools"></ul>
     <h3>🧠 记忆</h3><ul id="memories"></ul>
     <div id="upload">
-      <div class="tip">📤 共享你的资产给团队（技能 .skill.js/py · 工具 .mcp.js/py · 智能体 .json），上传后主机可加载、成员可下载</div>
+      <div class="tip">📤 共享你的资产给团队（技能 .skill.js/py · 工具 .tool.js/py · 智能体 .json），上传后主机可加载、成员可下载</div>
       <input type="file" id="file" accept=".js,.py,.json,.md">
       <button id="uploadBtn">上传到团队</button>
       <div id="uploadInfo"></div>
@@ -107,13 +107,13 @@
   function renderAssets(a) {
     $('skills').innerHTML = (a.skills || []).slice(0, 40).map(function (x) { return '<li><span>🎯 ' + esc(x.name) + '</span><a class="dl" href="/api/team/download?kind=skill&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
     $('agents').innerHTML = (a.agents || []).slice(0, 40).map(function (x) { return '<li><span>🌀 ' + esc(x.name) + ' <span class="cnt">(' + x.nodes + ' 节点)</span></span><a class="dl" href="/api/team/download?kind=agent&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
-    $('tools').innerHTML = (a.mcps || []).slice(0, 40).map(function (x) { return '<li><span>🔧 ' + esc(x.name) + '</span><a class="dl" href="/api/team/download?kind=mcp&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
+    $('tools').innerHTML = (a.toolPacks || a.mcps || []).slice(0, 40).map(function (x) { return '<li><span>🔧 ' + esc(x.name) + '</span><a class="dl" href="/api/team/download?kind=toolPack&name=' + encodeURIComponent(x.id) + '" download>📥</a></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
     $('memories').innerHTML = (a.memories || []).slice(0, 40).map(function (x) { return '<li><span>🧠 ' + esc(x.title || x.name) + '</span></li>' }).join('') || '<li><span class="cnt">（空）</span></li>'
   }
   function kindOf(fileName) {
     var f = String(fileName || '').toLowerCase()
     if (/\.skill\.(js|py)$/.test(f)) return 'skill'
-    if (/\.mcp\.(js|py)$/.test(f)) return 'mcp'
+    if (/\.(tool|mcp)\.(js|py)$/.test(f)) return 'toolPack'
     if (/\.json$/.test(f)) return 'agent'
     return null
   }
@@ -121,7 +121,7 @@
     var f = $('file').files[0]
     if (!f) { $('uploadInfo').textContent = '请先选择文件'; return }
     var kind = kindOf(f.name)
-    if (!kind) { $('uploadInfo').textContent = '不支持的文件：需要 .skill.js/.skill.py/.mcp.js/.mcp.py/.json'; return }
+    if (!kind) { $('uploadInfo').textContent = '不支持的文件：需要 .skill.js/.skill.py/.tool.js/.tool.py/.json'; return }
     if (f.size > 1024 * 1024) { $('uploadInfo').textContent = '文件超过 1MB'; return }
     var rd = new FileReader()
     rd.onload = function () {

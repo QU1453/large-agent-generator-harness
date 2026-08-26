@@ -2,6 +2,7 @@
 // 存储：<userData>/protocols/<name>.protocol.py
 // 协议由 PROTOCOL_* 常量定义（enabled/version/identity/endpoint/auth/access/audit），
 // 画布「协议节点」引用它，运行时作为智能体间通信网关做访问控制 + [[A2A]] 信封 + 审计。
+// 工具级访问控制（P4-1）：PROTOCOL_ALLOWED_TOOLS / PROTOCOL_DENIED_TOOLS 在工具执行管道 pre-execute 拦截。
 const fs = require('fs')
 const path = require('path')
 
@@ -93,6 +94,10 @@ PROTOCOL_AUTH_TYPE = "none"
 PROTOCOL_AUTH_SECRET = ""
 PROTOCOL_ALLOWED_PEERS = []
 PROTOCOL_DENIED_PEERS = []
+# 工具级访问控制（可选）：PROTOCOL_ALLOWED_TOOLS 非空时仅放行名单内工具；
+# PROTOCOL_DENIED_TOOLS 命中即拦截。留空 = 不限制工具。
+PROTOCOL_ALLOWED_TOOLS = []
+PROTOCOL_DENIED_TOOLS = []
 PROTOCOL_AUDIT = True
 `
 }
@@ -137,7 +142,9 @@ function parseMeta(name, content) {
     },
     access: {
       allowedPeers: parseConst(c, 'PROTOCOL_ALLOWED_PEERS', 'list') || [],
-      deniedPeers: parseConst(c, 'PROTOCOL_DENIED_PEERS', 'list') || []
+      deniedPeers: parseConst(c, 'PROTOCOL_DENIED_PEERS', 'list') || [],
+      allowedTools: parseConst(c, 'PROTOCOL_ALLOWED_TOOLS', 'list') || [],
+      deniedTools: parseConst(c, 'PROTOCOL_DENIED_TOOLS', 'list') || []
     },
     audit: parseConst(c, 'PROTOCOL_AUDIT', 'bool') !== false
   }
@@ -244,6 +251,8 @@ PROTOCOL_AUTH_TYPE = ${JSON.stringify((auth.type) || 'none')}
 PROTOCOL_AUTH_SECRET = ${JSON.stringify((auth.secret) || '')}
 PROTOCOL_ALLOWED_PEERS = ${JSON.stringify(Array.isArray(access.allowedPeers) ? access.allowedPeers : [])}
 PROTOCOL_DENIED_PEERS = ${JSON.stringify(Array.isArray(access.deniedPeers) ? access.deniedPeers : [])}
+PROTOCOL_ALLOWED_TOOLS = ${JSON.stringify(Array.isArray(access.allowedTools) ? access.allowedTools : [])}
+PROTOCOL_DENIED_TOOLS = ${JSON.stringify(Array.isArray(access.deniedTools) ? access.deniedTools : [])}
 PROTOCOL_AUDIT = ${d.audit === false ? 'False' : 'True'}
 `
       const dest = path.join(dir, `${name}.protocol.py`)

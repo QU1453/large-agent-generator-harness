@@ -1,6 +1,7 @@
 // OpenAI 兼容 LLM 客户端：流式 chat/completions + 工具调用
 const { execTool } = require('./tools')
-const mcp = require('./mcp')
+const toolPacks = require('./tool-packs')
+const externalMcps = require('./mcp-client')
 // 用 Electron 网络栈请求 LLM：自动走系统代理（直连 fetch 在代理环境下会连接超时）
 const { net } = require('electron')
 
@@ -261,19 +262,29 @@ function getToolSchemas(agent) {
   const builtin = TOOL_SCHEMAS.filter((s) => allowed.includes(s.function.name))
   if (allowed.includes('run_agent')) builtin.push(RUN_AGENT_SCHEMA)
   if (allowed.some((n) => n.startsWith('memory_'))) builtin.push(...MEMORY_TOOL_SCHEMAS)
-  // 合并 MCP 工具：智能体 tools 中引用 'mcp:工具名' 启用
-  const mcpNames = mcp.enabledToolNames(allowed)
-  const mcpSchemas = mcp.allTools()
+  // 合并工具包工具：智能体 tools 中引用 'tool:工具名'（兼容旧名 'mcp:工具名'）启用
+  const mcpNames = toolPacks.enabledToolNames(allowed)
+  const mcpSchemas = toolPacks.allTools()
     .filter((t) => mcpNames.has(t.name))
     .map((t) => ({
       type: 'function',
       function: {
-        name: `mcp_${t.name}`,
+        name: `tool_${t.name}`,
         description: t.description,
         parameters: t.parameters
       }
     }))
-  return [...builtin, ...mcpSchemas]
+  // 合并外部 MCP 工具（标准 MCP 协议）：全部启用，函数名 ext_ 前缀
+  const extSchemas = externalMcps.allTools()
+    .map((t) => ({
+      type: 'function',
+      function: {
+        name: `ext_${t.name}`,
+        description: t.description,
+        parameters: t.parameters
+      }
+    }))
+  return [...builtin, ...mcpSchemas, ...extSchemas]
 }
 
 module.exports = { streamChat, TOOL_SCHEMAS, RUN_AGENT_SCHEMA, MEMORY_TOOL_SCHEMAS, getToolSchemas, execTool }

@@ -76,7 +76,7 @@ function setName(n) {
   return team.name
 }
 
-// 记录资产上传者（成员归属）：kind=agent/mcp/skill/workflow，name=文件名或工作流 id
+// 记录资产上传者（成员归属）：kind=agent/toolPack/skill/workflow，name=文件名或工作流 id
 function addAsset(kind, name, owner) {
   const rec = { kind: String(kind || ''), name: String(name || ''), owner: String(owner || '成员'), ts: Date.now() }
   team.assets.push(rec)

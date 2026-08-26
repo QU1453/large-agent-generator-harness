@@ -2,8 +2,9 @@ import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import ChatView from './components/ChatView.jsx'
 import SkillPanel from './components/SkillPanel.jsx'
-import McpPanel from './components/McpPanel.jsx'
+import ToolPacksPanel from './components/ToolPacksPanel.jsx'
 import AgentPanel from './components/AgentPanel.jsx'
+import AgentAdmin from './components/AgentAdmin.jsx'
 import WorkspacePanel from './components/WorkspacePanel.jsx'
 import ProtocolPanel from './components/ProtocolPanel.jsx'
 import MemoryPanel from './components/MemoryPanel.jsx'
@@ -41,7 +42,7 @@ class ErrorBoundary extends Component {
 export default function App() {
   const [settings, setSettings] = useState({})
   const [skills, setSkills] = useState([])
-  const [mcps, setMcps] = useState([])
+  const [toolPacks, setToolPacks] = useState([])
   const [agents, setAgents] = useState([])
   const [memories, setMemories] = useState([])
   const [protocols, setProtocols] = useState([])
@@ -55,7 +56,7 @@ export default function App() {
   const [activeSandbox, setActiveSandbox] = useState(null) // 当前 sandbox
   const [apiStatus, setApiStatus] = useState({ running: false })
   const [showSettings, setShowSettings] = useState(false)
-  const [editor, setEditor] = useState(null) // {kind:'skill'|'mcp', id, file?}
+  const [editor, setEditor] = useState(null) // {kind:'skill'|'toolPack', id, file?}
   const [streaming, setStreaming] = useState(null) // {sessionId, content, status, tool}
   const [toast, setToast] = useState(null)
   // 侧栏宽度（可拖拽边框调整，localStorage 持久化）
@@ -113,7 +114,7 @@ export default function App() {
           h.sessions.list(),
           h.workspace.get(),
           h.api.status(),
-          h.mcps.list(),
+          h.toolPacks.list(),
           h.agents.list(),
           h.workspace.sandboxes(),
           h.memory.list(),
@@ -121,7 +122,7 @@ export default function App() {
         ])
         setSettings(st)
         setSkills(sk)
-        setMcps(mp.mcps)
+        setToolPacks(mp.toolPacks)
         setAgents(ag)
         setMemories(mem)
         setProtocols(prot)
@@ -410,7 +411,7 @@ export default function App() {
         activeId={activeId}
         skills={skills}
         agents={agents}
-        mcps={mcps}
+        toolPacks={toolPacks}
         workspace={workspace}
         sandboxes={sandboxes}
         activeSandbox={activeSandbox}
@@ -486,33 +487,33 @@ export default function App() {
               skillCount={skills.length}
               agentCount={agents.length}
               memoryCount={memories.length}
-              mcpCount={mcps.length}
+              mcpCount={toolPacks.length}
               onStatusChange={refreshApiStatus}
               onNavigate={setView}
             />
         )}
-        {view === 'mcp' && (
-          <McpPanel
-            mcps={mcps}
+        {view === 'toolPacks' && (
+          <ToolPacksPanel
+            toolPacks={toolPacks}
             python={pyStatus}
             onReload={async () => {
-              const r = await h.mcps.reload()
-              setMcps(r.mcps)
+              const r = await h.toolPacks.reload()
+              setToolPacks(r.toolPacks)
               setPyStatus(r.python)
               showToast('工具已重载', 'success')
             }}
             onToast={showToast}
             onCreate={async (type) => {
-              const r = await h.mcps.create(type)
-              setMcps(r.mcps)
-              setEditor({ kind: 'mcp', id: r.id, file: r.file })
+              const r = await h.toolPacks.create(type)
+              setToolPacks(r.toolPacks)
+              setEditor({ kind: 'toolPack', id: r.id, file: r.file })
               showToast(type === 'py' ? '已创建 Python 工具' : '已创建 JS 工具', 'success')
             }}
-            onEdit={(id) => setEditor({ kind: 'mcp', id })}
+            onEdit={(id) => setEditor({ kind: 'toolPack', id })}
             onDelete={async (id) => {
               try {
-                const r = await h.mcps.delete(id)
-                setMcps(r.mcps)
+                const r = await h.toolPacks.delete(id)
+                setToolPacks(r.toolPacks)
                 showToast('工具已删除', 'success')
               } catch (e) {
                 showToast(e.message, 'error')
@@ -520,8 +521,8 @@ export default function App() {
             }}
             onDeleteMany={async (ids) => {
               try {
-                const r = await h.mcps.deleteMany(ids)
-                setMcps(r.mcps)
+                const r = await h.toolPacks.deleteMany(ids)
+                setToolPacks(r.toolPacks)
                 showToast(`已删除 ${ids.length} 个工具`, 'success')
               } catch (e) {
                 showToast(e.message, 'error')
@@ -529,7 +530,7 @@ export default function App() {
             }}
           />
         )}
-        {view === 'agents' && (
+        {view === 'workflows' && (
           <AgentPanel
             skills={skills}
             agRunning={agRunning}
@@ -539,7 +540,13 @@ export default function App() {
             onToast={showToast}
             onEditSkill={(id) => setEditor({ kind: 'skill', id })}
             onEditProtocol={(name) => setEditor({ kind: 'protocol', id: name })}
-            onEditMcp={(id) => setEditor({ kind: 'mcp', id })}
+            onEditMcp={(id) => setEditor({ kind: 'toolPack', id })}
+          />
+        )}
+        {view === 'agents' && (
+          <AgentAdmin
+            skills={skills}
+            onToast={showToast}
           />
         )}
         {view === 'workspace' && (
@@ -576,7 +583,7 @@ export default function App() {
             } else if (editor.kind === 'protocol') {
               h.protocols.list().then(setProtocols)
             } else {
-              h.mcps.list().then(setMcps)
+              h.toolPacks.list().then(setToolPacks)
             }
             const label = editor.kind === 'skill' ? '技能' : editor.kind === 'protocol' ? '协议' : '工具'
             showToast(`${label}已保存并重载`, 'success')

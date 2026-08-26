@@ -696,10 +696,41 @@ function removeSessionCopy(sessionId) {
   return true
 }
 
+// 重命名架构内任意文件：受保护文件不可改名；目标不得与内置核心文件重名
+function renameFile(name, oldRel, newRel) {
+  const d = archDir(name)
+  if (!d) throw new Error('记忆名不能为空')
+  const src = resolveInArch(name, oldRel)
+  if (!src) throw new Error('路径越界')
+  if (!fs.existsSync(src)) throw new Error(`文件不存在: ${oldRel}`)
+  if (fs.statSync(src).isDirectory()) throw new Error('不能重命名目录')
+  const relNorm = path.relative(d, src).replace(/\\/g, '/')
+  const cfg = loadConfig(name)
+  const protList = cfg && Array.isArray(cfg.protected) ? cfg.protected : Object.values(FILE_NAMES)
+  if (protList.includes(relNorm)) {
+    throw new Error(`「${relNorm}」处于保护状态，不能重命名（右键该文件可取消保护）`)
+  }
+  let nr = String(newRel || '').trim().replace(/\\/g, '/')
+  if (!nr) throw new Error('新文件名不能为空')
+  const base = nr.split('/').pop()
+  if (/\.\w+$/.test(base)) {
+    if (Object.values(FILE_NAMES).includes(nr)) throw new Error(`「${nr}」是内置核心文件，不能重命名为该名称`)
+  } else {
+    nr = `${nr}.md`
+  }
+  if (nr === relNorm) return { rel: nr, ok: true }
+  const dest = resolveInArch(name, nr)
+  if (!dest) throw new Error('路径越界')
+  if (fs.existsSync(dest)) throw new Error(`目标已存在: ${nr}`)
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  fs.renameSync(src, dest)
+  return { rel: nr, ok: true }
+}
+
 module.exports = {
   init, list, get, create, save, delete: remove,
   dirPath, scopeFile, safeName, SCOPE_KEYS, FILE_NAMES,
-  loadConfig, saveConfig, archMtime, listFiles, readFileAny, writeFileAny, createFile, deleteFile, setProtected,
+  loadConfig, saveConfig, archMtime, listFiles, readFileAny, writeFileAny, createFile, deleteFile, renameFile, setProtected,
   resolveInArch, resolveInDir, loadConfigAt,
   archBinding, runOrganize, runExtract, resetLedger,
   addCategory, setCategory, removeCategory, listCategories,

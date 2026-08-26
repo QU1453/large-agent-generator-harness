@@ -4,7 +4,8 @@ const path = require('path')
 const fs = require('fs')
 const store = require('./store')
 const skills = require('./skills')
-const mcp = require('./mcp')
+const toolPacks = require('./tool-packs')
+const externalMcps = require('./mcp-client')
 const workspace = require('./workspace')
 const chat = require('./chat')
 const agent = require('./agent')
@@ -45,6 +46,7 @@ let mainWindow = null
 let settings = null
 let settingsStore = null
 let agentStore = null
+let defStore = null // 智能体定义存储（data/agent-defs）
 const activeChats = new Map() // sessionId -> AbortController
 const activeWorkflowRuns = new Map() // runId -> AbortController
 
@@ -75,10 +77,10 @@ function builtinSkillsDir() {
     : path.join(process.resourcesPath, 'builtin-skills')
 }
 
-function builtinMcpsDir() {
+function builtinToolPacksDir() {
   return isDev
-    ? path.join(__dirname, 'mcps')
-    : path.join(process.resourcesPath, 'builtin-mcps')
+    ? path.join(__dirname, 'tool-packs')
+    : path.join(process.resourcesPath, 'builtin-tool-packs')
 }
 
 // 一次性数据迁移（旧命名 → 新命名）：
@@ -88,6 +90,79 @@ function builtinMcpsDir() {
 //   skills/*.md（旧 md 技能）→ skills/<name>/main.skill.py
 //   平铺 skills/*.skill.js|py（旧 v2 产物）→ skills/<id>/main.skill.js|py
 function migrateData(userDataDir) {
+  // 0. 工具包改名迁移（MCP → tool）：独立标记，不受旧命名迁移完成状态影响
+  const tpMark = path.join(userDataDir, '.migrated-toolpack-v1')
+  if (!fs.existsSync(tpMark)) {
+    try {
+      // 0.1 用户工具包目录改名：mcps → tool-packs，文件 .mcp.* → .tool.*（覆盖式，保留用户可能改过的版本）
+      const oldMcps = path.join(userDataDir, 'mcps')
+      const newTp = path.join(userDataDir, 'tool-packs')
+      if (fs.existsSync(oldMcps)) {
+        fs.mkdirSync(newTp, { recursive: true })
+        for (const name of fs.readdirSync(oldMcps)) {
+          if (name === '__pycache__') { try { fs.rmSync(path.join(oldMcps, name), { recursive: true, force: true }) } catch {} ; continue }
+          const dest = path.join(newTp, name.replace(/\.mcp\.(js|py)$/, '.tool.$1'))
+          try { fs.copyFileSync(path.join(oldMcps, name), dest) } catch (e) { console.warn('[migrate] 工具包文件迁移失败:', name, e.message) }
+        }
+        try { fs.rmSync(oldMcps, { recursive: true, force: true }) } catch { /* 忽略 */ }
+      }
+      // 0.2 技能源码引用 mcp:xxx → tool:xxx（引号内精准替换；JS + Python 技能，含记忆卡片技能）
+      const replaceRefs = (code) => code.replace(/(["'])(mcp:[A-Za-z0-9_]+)\1/g, (_m, q, v) => `${q}tool:${v.slice(4)}${q}`)
+      const skillSrc = []
+      const skDir2 = path.join(userDataDir, 'skills')
+      if (fs.existsSync(skDir2)) {
+        for (const id of fs.readdirSync(skDir2)) {
+          for (const f of ['main.skill.js', 'main.skill.py']) {
+            const fp = path.join(skDir2, id, f)
+            if (fs.existsSync(fp)) skillSrc.push(fp)
+          }
+        }
+      }
+      const memRoot = path.join(userDataDir, 'memory')
+      if (fs.existsSync(memRoot)) {
+        for (const arch of fs.readdirSync(memRoot)) {
+          const archDir = path.join(memRoot, arch)
+          let st
+          try { st = fs.statSync(archDir) } catch { continue }
+          if (!st.isDirectory()) continue
+          for (const f of fs.readdirSync(archDir)) {
+            if (f.endsWith('.skill.py')) skillSrc.push(path.join(archDir, f))
+          }
+        }
+      }
+      for (const fp of skillSrc) {
+        try {
+          const code = fs.readFileSync(fp, 'utf8')
+          const next = replaceRefs(code)
+          if (next !== code) fs.writeFileSync(fp, next, 'utf8')
+        } catch { /* 忽略 */ }
+      }
+      // 0.3 画布节点级工具链接 mcp:xxx → tool:xxx
+      const agDir2 = path.join(userDataDir, 'agents')
+      if (fs.existsSync(agDir2)) {
+        for (const name of fs.readdirSync(agDir2)) {
+          if (!name.endsWith('.json')) continue
+          try {
+            const fp = path.join(agDir2, name)
+            const ag = JSON.parse(fs.readFileSync(fp, 'utf8'))
+            let changed = false
+            for (const n of ag.nodes || []) {
+              if (n && Array.isArray(n.tools)) {
+                const nt = n.tools.map((t) => (typeof t === 'string' && t.startsWith('mcp:') ? 'tool:' + t.slice(4) : t))
+                if (JSON.stringify(nt) !== JSON.stringify(n.tools)) { n.tools = nt; changed = true }
+              }
+            }
+            if (changed) fs.writeFileSync(fp, JSON.stringify(ag, null, 2), 'utf8')
+          } catch (e) { console.warn('[migrate] 画布工具引用迁移失败:', name, e.message) }
+        }
+      }
+      fs.writeFileSync(tpMark, JSON.stringify({ ts: Date.now() }), 'utf8')
+      console.log('[migrate] 工具包改名迁移完成（mcps → tool-packs）')
+    } catch (e) {
+      console.warn('[migrate] 工具包改名迁移失败:', e.message)
+    }
+  }
+
   const mark = path.join(userDataDir, '.migrated-naming-v3')
   if (fs.existsSync(mark)) return
   const move = (src, dest) => {
@@ -214,6 +289,8 @@ function migrateData(userDataDir) {
       }
     }
 
+    // 5. 工具包改名迁移已前移到函数开头（独立标记 .migrated-toolpack-v1）
+
     fs.writeFileSync(mark, JSON.stringify({ ts: Date.now() }), 'utf8')
     console.log('[migrate] 命名迁移完成')
   } catch (e) {
@@ -285,7 +362,7 @@ function createWindow() {
             const vi = process.argv.indexOf('--shot-view')
             if (vi >= 0) shotViewName = process.argv[vi + 1]
           }
-          const views = ['chat', 'agents', 'protocols', 'skills', 'memory', 'mcp', 'terminal', 'team', 'workspace']
+          const views = ['chat', 'workflows', 'agents', 'protocols', 'skills', 'memory', 'toolPacks', 'terminal', 'team', 'workspace']
           const idx = views.indexOf(shotViewName)
           if (idx >= 0) {
               try { require('fs').writeFileSync(path.join(DATA_DIR, 'e2e-diag.json'), JSON.stringify({ step: 'before-nav-click', idx }, null, 2), 'utf8') } catch {}
@@ -487,7 +564,7 @@ async function runChatFor(skillId, sessionId, message) {
       historyMessages: session.messages.slice(0, -1),
       session,
       signal: controller.signal,
-      toolContext: { memoryFiles: memBind.memoryFiles },
+      toolContext: { memoryFiles: memBind.memoryFiles, sessionId, skillId },
       onToken: ({ content }) => send('chat:token', { sessionId, content }),
       onTool: ({ name, args, result }) => {
         trace.push({ type: 'tool', name, args: typeof args === 'string' ? args : JSON.stringify(args), result: String(result).slice(0, 800) })
@@ -649,38 +726,38 @@ function registerIpc() {
   ipcMain.handle('skills:add-category', (_e, name) => skills.addCategory(name))
   ipcMain.handle('skills:set-category', (_e, id, name) => skills.setCategory(id, name))
   ipcMain.handle('skills:remove-category', (_e, name) => skills.removeCategory(name))
-  ipcMain.handle('mcp:remove-category', (_e, name) => skills.removeCategory(name))
+  ipcMain.handle('toolpacks:remove-category', (_e, name) => skills.removeCategory(name))
 
-  // ---------------- MCP ----------------
-  ipcMain.handle('mcps:list', () => mcp.list())
-  ipcMain.handle('mcps:reload', () => mcp.reload())
-  ipcMain.handle('mcps:read', (_e, id) => {
-    const file = mcp.getSourceFile(id)
+  // ---------------- 工具包（内部工具，旧名 MCP） ----------------
+  ipcMain.handle('toolpacks:list', () => toolPacks.list())
+  ipcMain.handle('toolpacks:reload', () => toolPacks.reload())
+  ipcMain.handle('toolpacks:read', (_e, id) => {
+    const file = toolPacks.getSourceFile(id)
     if (!file) return null
     const fs = require('fs')
-    return { content: fs.readFileSync(file, 'utf8'), file, kind: 'mcp' }
+    return { content: fs.readFileSync(file, 'utf8'), file, kind: 'toolPack' }
   })
-  ipcMain.handle('mcps:write', async (_e, id, content) => {
-    const file = mcp.getSourceFile(id)
+  ipcMain.handle('toolpacks:write', async (_e, id, content) => {
+    const file = toolPacks.getSourceFile(id)
     if (!file) throw new Error('工具文件不存在')
     require('fs').writeFileSync(file, content, 'utf8')
-    await mcp.reload()
-    if (!mcp.getSourceFile(id)) {
+    await toolPacks.reload()
+    if (!toolPacks.getSourceFile(id)) {
       throw new Error('代码已保存到磁盘，但存在语法错误导致无法加载。请修正代码后再次保存。')
     }
     return { ok: true }
   })
-  ipcMain.handle('mcps:create', async (_e, type) => {
+  ipcMain.handle('toolpacks:create', async (_e, type) => {
     const fs = require('fs')
-    const userDir = path.join(app.getPath('userData'), 'mcps')
+    const userDir = path.join(app.getPath('userData'), 'tool-packs')
     const isPy = type === 'py'
-    const n = (await mcp.list()).mcps.length + 1
+    const n = (await toolPacks.list()).toolPacks.length + 1
     const ext = isPy ? 'py' : 'js'
-    const file = path.join(userDir, `custom${n}.mcp.${ext}`)
+    const file = path.join(userDir, `custom${n}.tool.${ext}`)
     const template = isPy
       ? `# ============================================================
-# MCP: 自定义 Python 工具包 ${n}
-# 修改此文件即可客制化你的 MCP 工具，保存后在界面上点击"重载"生效。
+# 自定义 Python 工具包 ${n}
+# 修改此文件即可客制化你的工具包，保存后在界面上点击"重载"生效。
 # ============================================================
 MCP_ID = "custom${n}"
 MCP_NAME = "自定义 Python 工具包 ${n}"
@@ -706,8 +783,8 @@ def my_tool(args):
     return "收到输入: " + str(args.get("input", ""))
 `
       : `// ============================================================
-// MCP：自定义工具包 ${n}
-// 修改此文件即可客制化你的 MCP 工具，保存后在界面上点击"重载"生效。
+// 自定义工具包 ${n}
+// 修改此文件即可客制化你的工具包，保存后在界面上点击"重载"生效。
 // ============================================================
 module.exports = {
   id: 'custom${n}',
@@ -734,50 +811,57 @@ module.exports = {
 `
     fs.mkdirSync(userDir, { recursive: true })
     fs.writeFileSync(file, template, 'utf8')
-    const r = await mcp.reload()
-    return { ok: true, file, id: `custom${n}`, kind: isPy ? 'py' : 'js', mcps: r.mcps }
+    const r = await toolPacks.reload()
+    return { ok: true, file, id: `custom${n}`, kind: isPy ? 'py' : 'js', toolPacks: r.toolPacks }
   })
-  ipcMain.handle('mcps:delete', async (_e, id) => {
+  ipcMain.handle('toolpacks:delete', async (_e, id) => {
     const fs = require('fs')
-    const file = mcp.getSourceFile(id)
+    const file = toolPacks.getSourceFile(id)
     if (!file) throw new Error('工具文件不存在')
     fs.unlinkSync(file)
-    const r = await mcp.reload()
-    return { ok: true, mcps: r.mcps }
+    const r = await toolPacks.reload()
+    return { ok: true, toolPacks: r.toolPacks }
   })
-  ipcMain.handle('mcps:delete-many', async (_e, ids) => {
+  ipcMain.handle('toolpacks:delete-many', async (_e, ids) => {
     const fs = require('fs')
     for (const id of ids || []) {
-      const file = mcp.getSourceFile(id)
+      const file = toolPacks.getSourceFile(id)
       if (file) { try { fs.unlinkSync(file) } catch { /* 忽略 */ } }
     }
-    const r = await mcp.reload()
-    return { ok: true, mcps: r.mcps }
+    const r = await toolPacks.reload()
+    return { ok: true, toolPacks: r.toolPacks }
   })
-  ipcMain.handle('mcps:read-file', (_e, file) => {
+  ipcMain.handle('toolpacks:read-file', (_e, file) => {
     const fs = require('fs')
     if (!file || !fs.existsSync(file)) return null
-    return { content: fs.readFileSync(file, 'utf8'), file, kind: 'mcp' }
+    return { content: fs.readFileSync(file, 'utf8'), file, kind: 'toolPack' }
   })
-  // 工具分类（数据存 data/categories.json 的 mcpMap 段）
-  ipcMain.handle('mcp:categories', () => skills.listCategories())
-  ipcMain.handle('mcp:add-category', (_e, name) => skills.addCategory(name))
-  ipcMain.handle('mcp:set-category', (_e, id, name) => skills.setMcpCategory(id, name))
-  ipcMain.handle('mcps:write-file', async (_e, file, content) => {
+  // 工具分类（数据存 data/categories.json 的 toolPackMap 段，兼容旧 mcpMap）
+  ipcMain.handle('toolpacks:categories', () => skills.listCategories())
+  ipcMain.handle('toolpacks:add-category', (_e, name) => skills.addCategory(name))
+  ipcMain.handle('toolpacks:set-category', (_e, id, name) => skills.setMcpCategory(id, name))
+  ipcMain.handle('toolpacks:write-file', async (_e, file, content) => {
     const fs = require('fs')
     if (!file) throw new Error('文件路径无效')
     fs.writeFileSync(file, content, 'utf8')
-    const r = await mcp.reload()
-    if (!r.mcps.some((m) => m.file === file)) {
+    const r = await toolPacks.reload()
+    if (!r.toolPacks.some((m) => m.file === file)) {
       throw new Error('代码已保存到磁盘，但存在语法错误导致无法加载。请修正代码后再次保存。')
     }
-    return { ok: true, mcps: r.mcps }
+    return { ok: true, toolPacks: r.toolPacks }
   })
-  // MCP 工具「运行/调试」：执行某个已加载工具（按工具名），返回结果字符串
-  ipcMain.handle('mcp:run-tool', async (_e, name, args) => {
-    const value = await mcp.execTool(name, args || {})
+  // 工具「运行/调试」：执行某个已加载工具（按工具名），返回结果字符串
+  ipcMain.handle('toolpacks:run-tool', async (_e, name, args) => {
+    const value = await toolPacks.execTool(name, args || {})
     return { ok: true, value }
   })
+
+  // ---------------- 外部 MCP（标准 MCP 协议，Harness 作为客户端接入） ----------------
+  ipcMain.handle('extmcps:list', () => externalMcps.list())
+  ipcMain.handle('extmcps:add', (_e, input) => externalMcps.add(input || {}))
+  ipcMain.handle('extmcps:update', (_e, id, patch) => externalMcps.update(id, patch || {}))
+  ipcMain.handle('extmcps:delete', (_e, id) => externalMcps.remove(id))
+  ipcMain.handle('extmcps:reload', () => externalMcps.reload())
   ipcMain.handle('skills:create', async (_e, type) => {
     const fs = require('fs')
     const userDir = path.join(app.getPath('userData'), 'skills')
@@ -799,7 +883,7 @@ SKILL_MODEL = None  # 留空使用全局默认模型
 SKILL_TEMPERATURE = 0.7
 SKILL_MAX_TOKENS = 4096
 
-# 工具：内置 list_dir/read_file/write_file；MCP 工具用 'mcp:工具名' 引用（见"工具"面板）
+# 工具：内置 list_dir/read_file/write_file；工具包工具用 'tool:工具名' 引用（见"工具包"面板）
 SKILL_TOOLS = ['list_dir', 'read_file', 'write_file']
 
 # 提示词可以是固定字符串：
@@ -822,7 +906,7 @@ module.exports = {
   model: null, // 留空使用全局默认模型
   temperature: 0.7,
   maxTokens: 4096,
-  // 工具：内置 list_dir/read_file/write_file；MCP 工具用 'mcp:工具名' 引用（见"工具"面板）
+  // 工具：内置 list_dir/read_file/write_file；工具包工具用 'tool:工具名' 引用（见"工具包"面板）
   tools: ['list_dir', 'read_file', 'write_file'],
   systemPrompt: (ctx) => {
     const ws = ctx.workspaceName ? '当前工作区：' + ctx.workspaceName : '当前未打开工作区'
@@ -871,6 +955,7 @@ module.exports = {
   })
   ipcMain.handle('skills:create-file', (_e, id, rel, content) => skills.createFile(id, rel, content))
   ipcMain.handle('skills:delete-file', (_e, id, rel) => skills.deleteFile(id, rel))
+  ipcMain.handle('skills:rename-file', (_e, id, oldRel, newRel) => skills.renameFile(id, oldRel, newRel))
   ipcMain.handle('skills:set-file-readable', (_e, id, rel, readable) => skills.setFileReadable(id, rel, !!readable))
 
   ipcMain.handle('sessions:list', () => chat.getSessionStore().list())
@@ -979,6 +1064,23 @@ module.exports = {
   ipcMain.handle('agents:add-category', (_e, name) => agentStore.addCategory(name))
   ipcMain.handle('agents:set-category', (_e, id, name) => agentStore.setCategory(id, name))
   ipcMain.handle('agents:remove-category', (_e, name) => agentStore.removeCategory(name))
+
+  // ---------------- 智能体定义（「智能体」栏：单智能体 = 模型/提示词/技能） ----------------
+  ipcMain.handle('agdefs:list', () => defStore.list())
+  ipcMain.handle('agdefs:create', () => defStore.create())
+  ipcMain.handle('agdefs:get', (_e, id) => defStore.get(id))
+  ipcMain.handle('agdefs:save', (_e, def) => {
+    const saved = defStore.save(def)
+    return { ok: true, list: defStore.list(), def: saved }
+  })
+  ipcMain.handle('agdefs:delete', (_e, id) => {
+    defStore.remove(id)
+    return { ok: true }
+  })
+  ipcMain.handle('agdefs:categories', () => defStore.listCategories())
+  ipcMain.handle('agdefs:add-category', (_e, name) => defStore.addCategory(name))
+  ipcMain.handle('agdefs:set-category', (_e, id, name) => defStore.setCategory(id, name))
+  ipcMain.handle('agdefs:remove-category', (_e, name) => defStore.removeCategory(name))
   ipcMain.handle('agent:run', (_e, id, inputs) => {
     const ag = agentStore.get(id)
     if (!ag) throw new Error('智能体不存在')
@@ -1088,6 +1190,7 @@ module.exports = {
   ipcMain.handle('memory:write-file', (_e, name, rel, content) => memory.writeFileAny(name, rel, content))
   ipcMain.handle('memory:create-file', (_e, name, rel, content) => memory.createFile(name, rel, content))
   ipcMain.handle('memory:delete-file', (_e, name, rel) => memory.deleteFile(name, rel))
+  ipcMain.handle('memory:rename-file', (_e, name, oldRel, newRel) => memory.renameFile(name, oldRel, newRel))
   ipcMain.handle('memory:set-protected', (_e, name, rel, on) => memory.setProtected(name, rel, on))
   ipcMain.handle('memory:organize', async (_e, name) => {
     return await memory.runOrganize(name, { settings, agentStore })
@@ -1125,7 +1228,7 @@ module.exports = {
       description: '运行一个已保存的智能体（多 skill 编排流水线），返回其最终输出文本。',
       parameters: llm.RUN_AGENT_SCHEMA && llm.RUN_AGENT_SCHEMA.function.parameters || null
     })
-    return { builtin, mcps: mcp.allTools().map((t) => ({ name: t.name, description: t.description || '', mcpId: t.mcpId, parameters: t.parameters || null })) }
+    return { builtin, toolPacks: toolPacks.allTools().map((t) => ({ name: t.name, description: t.description || '', packId: t.packId, parameters: t.parameters || null })), external: externalMcps.allTools().map((t) => ({ name: t.name, description: t.description || '', packId: t.packId, parameters: t.parameters || null })) }
   })
 
   ipcMain.handle('api:status', () => apiServer.status())
@@ -1185,7 +1288,7 @@ async function restartApi() {
     return { running: false }
   }
   try {
-    return await apiServer.start({ getSettings: () => settings, team, agentStore, userDataDir: app.getPath('userData'), agent, mcp, memory, runPythonFile, auditDir: path.join(DATA_DIR, 'audit') })
+    return await apiServer.start({ getSettings: () => settings, team, agentStore, userDataDir: app.getPath('userData'), agent, toolPacks, memory, runPythonFile, auditDir: path.join(DATA_DIR, 'audit') })
   } catch (e) {
     console.warn('[api]', e.message)
     return { running: false, error: e.message }
@@ -1228,6 +1331,9 @@ if (!gotLock) {
     chat.initSessionStore(app.getPath('userData'))
     migrateData(app.getPath('userData'))
     agentStore = agent.createAgentStore(app.getPath('userData'))
+    // 智能体定义（data/agent-defs）：「智能体」栏数据；挂到 agentStore 上供运行时子智能体节点回退解析
+    defStore = agent.createAgentDefStore(app.getPath('userData'))
+    agentStore.getDef = (id) => defStore.get(id)
     skills.init({
       builtin: builtinSkillsDir(),
       user: path.join(app.getPath('userData'), 'skills')
@@ -1237,10 +1343,30 @@ if (!gotLock) {
     team.init(app.getPath('userData'))
     if (settings.teamName) team.setName(settings.teamName)
     tools.registerAgentRuntime({ agentStore, getSettings: () => settings })
-    mcp.init({
-      builtin: builtinMcpsDir(),
-      user: path.join(app.getPath('userData'), 'mcps')
+    // P4-1 工具执行管道：统一审计消费者（所有工具调用写 data/audit/tools.jsonl）
+    tools.installAudit(path.join(DATA_DIR, 'audit'))
+    toolPacks.init({
+      builtin: builtinToolPacksDir(),
+      user: path.join(app.getPath('userData'), 'tool-packs')
     })
+    // 外部 MCP 客户端（标准 MCP 协议）：启动时连接已启用的外部 MCP Server
+    externalMcps.init()
+
+    // 启动诊断：把本实例实际加载的工具写到 data/diag-toolpacks.json（排查"工具缺失"用）
+    setTimeout(async () => {
+      try {
+        const r = await toolPacks.list()
+        fs.writeFileSync(path.join(DATA_DIR, 'diag-toolpacks.json'), JSON.stringify({
+          ts: Date.now(),
+          exe: process.execPath,
+          userData: app.getPath('userData'),
+          builtin: builtinToolPacksDir(),
+          pyLoadError: r.pyLoadError || null,
+          python: r.python,
+          packs: r.toolPacks.map((m) => `${m.id}(${m.kind}:${(m.tools || []).length})`)
+        }, null, 2), 'utf8')
+      } catch { /* 诊断失败忽略 */ }
+    }, 4000)
 
     registerIpc()
     createWindow()
@@ -1257,5 +1383,6 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     apiServer.stop()
+    externalMcps.stopAll()
   })
 }

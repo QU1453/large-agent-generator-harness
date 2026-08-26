@@ -49,13 +49,45 @@ def merge_llm_config(manifest, file_cfg):
         if isinstance(val, str) and val.startswith('env:'):
             return ''
         return val
-    return {
+    cfg = {
         'base_url': pick('LLM_BASE_URL', model.get('baseUrl'), file_cfg.get('base_url')),
         'api_key': pick('LLM_API_KEY', model.get('apiKey'), file_cfg.get('api_key')),
         'model': pick('LLM_MODEL', model.get('default'), file_cfg.get('model')),
         'max_tokens': model.get('maxTokens'),
         'temperature': model.get('temperature', 0.7),
     }
+    # 每智能体注入配置（导出后通过 /api/config 给全局 / 某个智能体传输 url/api）
+    agents = file_cfg.get('agents')
+    if isinstance(agents, dict) and agents:
+        cfg['_node_models'] = {k: v for k, v in agents.items() if isinstance(v, dict)}
+    return cfg
+
+def save_injected_config(root, base_cfg, agents_map):
+    # 保存全局 + 每智能体配置（/api/config 注入接口）
+    data = {}
+    if base_cfg and isinstance(base_cfg, dict):
+        for k in ('base_url', 'api_key', 'model'):
+            v = base_cfg.get(k)
+            if v:
+                data[k] = v
+    if agents_map and isinstance(agents_map, dict):
+        clean = {}
+        for k, v in agents_map.items():
+            if not isinstance(v, dict):
+                continue
+            entry = {}
+            for f in ('base_url', 'api_key', 'model'):
+                val = v.get(f)
+                if val:
+                    entry[f] = val
+            if entry:
+                clean[k] = entry
+        if clean:
+            data['agents'] = clean
+    fp = config_path(root)
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    with open(fp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def is_ready(cfg):
     return bool(cfg.get('base_url') and cfg.get('api_key'))

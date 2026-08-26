@@ -24,7 +24,7 @@ let pyLoadError = null
 let categoriesFile = null
 let categoryList = []
 let categoryMap = {}   // skillId -> 分类
-let mcpCategoryMap = {} // mcpId -> 分类
+let mcpCategoryMap = {} // 工具包分类（toolPackId -> 分类；变量保留旧名避免大规模改名）
 let removedCats = []   // 已删除分类黑名单
 
 function loadCategories() {
@@ -422,8 +422,35 @@ function deleteFile(id, rel) {
   return { ok: true }
 }
 
+// 重命名技能目录内文件（主组件不可改名；保留可读性记录；无扩展名自动补 .md 与新建一致）
+function renameFile(id, oldRel, newRel) {
+  const src = resolveInSkill(id, oldRel)
+  if (!src) throw new Error('路径越界')
+  if (MAIN_NAMES.includes(path.basename(src))) throw new Error('主组件文件不可重命名')
+  if (!fs.existsSync(src)) throw new Error(`文件不存在: ${oldRel}`)
+  if (fs.statSync(src).isDirectory()) throw new Error('不能重命名目录')
+  let nr = String(newRel || '').trim().replace(/\\/g, '/')
+  if (!nr) throw new Error('新文件名不能为空')
+  if (!/\.\w+$/.test(nr.split('/').pop())) nr = `${nr}.md`
+  const oldKey = String(oldRel).replace(/\\/g, '/')
+  if (nr === oldKey) return { rel: nr, ok: true }
+  const dest = resolveInSkill(id, nr)
+  if (!dest) throw new Error('路径越界')
+  if (fs.existsSync(dest)) throw new Error(`目标已存在: ${nr}`)
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  fs.renameSync(src, dest)
+  // 迁移可读性记录（.skill-file-perms.json）
+  const perms = loadFilePerms(id)
+  if (perms[oldKey] != null) {
+    perms[nr] = perms[oldKey]
+    delete perms[oldKey]
+    saveFilePerms(id, perms)
+  }
+  return { rel: nr, ok: true }
+}
+
 module.exports = {
   init, reload, list, get, resolveSystemPrompt, getSourceFile, getPyLoadError: () => pyLoadError,
   addCategory, setCategory, setMcpCategory, removeCategory, listCategories,
-  getSkillDir, listFiles, readFile, writeFile, createFile, deleteFile, setFileReadable
+  getSkillDir, listFiles, readFile, writeFile, createFile, deleteFile, renameFile, setFileReadable
 }

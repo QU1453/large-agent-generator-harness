@@ -1,4 +1,4 @@
-# 工具注册与执行：动态加载 tools/ 目录下的 .mcp.py 工具包
+# 工具注册与执行：动态加载 tools/ 目录下的 .tool.py 工具包（兼容旧 .mcp.py）
 import importlib.util
 import json
 import os
@@ -8,7 +8,7 @@ def load_tools(tools_dir):
     if not os.path.isdir(tools_dir):
         return registry
     for name in sorted(os.listdir(tools_dir)):
-        if not name.endswith('.mcp.py'):
+        if not (name.endswith('.tool.py') or name.endswith('.mcp.py')):
             continue
         mod_path = os.path.join(tools_dir, name)
         try:
@@ -31,7 +31,7 @@ def build_tool_schemas(agent, registry):
     for n, item in registry.items():
         if n.startswith('_'):
             continue
-        if names and n not in names and ('mcp:' + n) not in names:
+        if names and n not in names and ('tool:' + n) not in names and ('mcp:' + n) not in names:
             continue
         schema = item['schema']
         out.append({

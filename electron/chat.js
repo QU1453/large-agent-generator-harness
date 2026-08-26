@@ -56,10 +56,14 @@ async function runChat(opts) {
   if (!skill) throw new Error(`skill 不存在: ${opts.skillId}`)
 
   const settings = opts.settings
-  if (!settings.baseUrl) throw new Error('未配置 API Base URL，请先在设置中填写')
-  if (!settings.apiKey) throw new Error('未配置 API Key，请先在设置中填写')
-
-  const model = opts.model || skill.model || settings.model || ''
+  // 节点/智能体级模型配置（resolveNodeModel 结果）：baseUrl/apiKey/model 可覆盖全局设置
+  // opts.model 兼容两种形态：对象 {baseUrl,apiKey,model}（新节点配置）或字符串（旧版会话模型名）
+  const m = opts.model
+  const baseUrl = (m && typeof m === 'object' && m.baseUrl ? String(m.baseUrl).trim() : '') || settings.baseUrl
+  const apiKey = (m && typeof m === 'object' && m.apiKey ? String(m.apiKey).trim() : '') || settings.apiKey
+  const model = (typeof m === 'string' ? m : (m && typeof m === 'object' && m.model ? String(m.model).trim() : '')) || skill.model || settings.model || ''
+  if (!baseUrl) throw new Error('未配置 API Base URL，请先在设置中填写')
+  if (!apiKey) throw new Error('未配置 API Key，请先在设置中填写')
   if (!model) throw new Error('未配置默认模型，请先在设置中填写，或为该 skill 指定模型')
 
   const messages = [
@@ -75,8 +79,8 @@ async function runChat(opts) {
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const gen = llm.streamChat({
-      baseUrl: settings.baseUrl,
-      apiKey: settings.apiKey,
+      baseUrl,
+      apiKey,
       model,
       messages,
       temperature: skill.temperature ?? 0.7,

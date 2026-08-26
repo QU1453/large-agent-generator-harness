@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('harness', {
     writeFile: (id, rel, content) => ipcRenderer.invoke('skills:write-file', id, rel, content),
     createFile: (id, rel, content) => ipcRenderer.invoke('skills:create-file', id, rel, content),
     deleteFile: (id, rel) => ipcRenderer.invoke('skills:delete-file', id, rel),
+    renameFile: (id, oldRel, newRel) => ipcRenderer.invoke('skills:rename-file', id, oldRel, newRel),
     setFileReadable: (id, rel, readable) => ipcRenderer.invoke('skills:set-file-readable', id, rel, readable),
     categories: () => ipcRenderer.invoke('skills:categories'),
     addCategory: (name) => ipcRenderer.invoke('skills:add-category', name),
@@ -43,21 +44,28 @@ contextBridge.exposeInMainWorld('harness', {
     save: (item) => ipcRenderer.invoke('custom-nodes:save', item),
     delete: (id) => ipcRenderer.invoke('custom-nodes:delete', id)
   },
-  mcps: {
-    list: () => ipcRenderer.invoke('mcps:list'),
-    reload: () => ipcRenderer.invoke('mcps:reload'),
-    create: (type) => ipcRenderer.invoke('mcps:create', type),
-    delete: (id) => ipcRenderer.invoke('mcps:delete', id),
-    deleteMany: (ids) => ipcRenderer.invoke('mcps:delete-many', ids),
-    read: (id) => ipcRenderer.invoke('mcps:read', id),
-    write: (id, content) => ipcRenderer.invoke('mcps:write', id, content),
-    readFile: (file) => ipcRenderer.invoke('mcps:read-file', file),
-    writeFile: (file, content) => ipcRenderer.invoke('mcps:write-file', file, content),
-    runTool: (name, args) => ipcRenderer.invoke('mcp:run-tool', name, args),
-    categories: () => ipcRenderer.invoke('mcp:categories'),
-    addCategory: (name) => ipcRenderer.invoke('mcp:add-category', name),
-    setCategory: (id, name) => ipcRenderer.invoke('mcp:set-category', id, name),
-    removeCategory: (name) => ipcRenderer.invoke('mcp:remove-category', name)
+  toolPacks: {
+    list: () => ipcRenderer.invoke('toolpacks:list'),
+    reload: () => ipcRenderer.invoke('toolpacks:reload'),
+    create: (type) => ipcRenderer.invoke('toolpacks:create', type),
+    delete: (id) => ipcRenderer.invoke('toolpacks:delete', id),
+    deleteMany: (ids) => ipcRenderer.invoke('toolpacks:delete-many', ids),
+    read: (id) => ipcRenderer.invoke('toolpacks:read', id),
+    write: (id, content) => ipcRenderer.invoke('toolpacks:write', id, content),
+    readFile: (file) => ipcRenderer.invoke('toolpacks:read-file', file),
+    writeFile: (file, content) => ipcRenderer.invoke('toolpacks:write-file', file, content),
+    runTool: (name, args) => ipcRenderer.invoke('toolpacks:run-tool', name, args),
+    categories: () => ipcRenderer.invoke('toolpacks:categories'),
+    addCategory: (name) => ipcRenderer.invoke('toolpacks:add-category', name),
+    setCategory: (id, name) => ipcRenderer.invoke('toolpacks:set-category', id, name),
+    removeCategory: (name) => ipcRenderer.invoke('toolpacks:remove-category', name)
+  },
+  extMcps: {
+    list: () => ipcRenderer.invoke('extmcps:list'),
+    add: (input) => ipcRenderer.invoke('extmcps:add', input),
+    update: (id, patch) => ipcRenderer.invoke('extmcps:update', id, patch),
+    delete: (id) => ipcRenderer.invoke('extmcps:delete', id),
+    reload: () => ipcRenderer.invoke('extmcps:reload')
   },
   sessions: {
     list: () => ipcRenderer.invoke('sessions:list'),
@@ -116,6 +124,17 @@ contextBridge.exposeInMainWorld('harness', {
     onOutput: (fn) => on('agent:output', fn),
     onDone: (fn) => on('agent:done', fn)
   },
+  agdefs: {
+    list: () => ipcRenderer.invoke('agdefs:list'),
+    create: () => ipcRenderer.invoke('agdefs:create'),
+    get: (id) => ipcRenderer.invoke('agdefs:get', id),
+    save: (def) => ipcRenderer.invoke('agdefs:save', def),
+    delete: (id) => ipcRenderer.invoke('agdefs:delete', id),
+    categories: () => ipcRenderer.invoke('agdefs:categories'),
+    addCategory: (name) => ipcRenderer.invoke('agdefs:add-category', name),
+    setCategory: (id, name) => ipcRenderer.invoke('agdefs:set-category', id, name),
+    removeCategory: (name) => ipcRenderer.invoke('agdefs:remove-category', name)
+  },
   exporter: {
     run: (opts) => ipcRenderer.invoke('exporter:run', opts),
     buildExe: (opts) => ipcRenderer.invoke('exporter:build-exe', opts)
@@ -147,6 +166,7 @@ contextBridge.exposeInMainWorld('harness', {
     writeFile: (name, rel, content) => ipcRenderer.invoke('memory:write-file', name, rel, content),
     createFile: (name, rel, content) => ipcRenderer.invoke('memory:create-file', name, rel, content),
     deleteFile: (name, rel) => ipcRenderer.invoke('memory:delete-file', name, rel),
+    renameFile: (name, oldRel, newRel) => ipcRenderer.invoke('memory:rename-file', name, oldRel, newRel),
     setProtected: (name, rel, on) => ipcRenderer.invoke('memory:set-protected', name, rel, on),
     organize: (name) => ipcRenderer.invoke('memory:organize', name),
     extract: (name, text) => ipcRenderer.invoke('memory:extract', name, text),

@@ -110,6 +110,36 @@ def find_skill(skill_list, skill_id):
             return a
     return None
 
+def resolve_node_config(manifest, node, config):
+    # 节点级模型配置：inherit=False 且填了自定义字段 → 用节点配置；否则回落全局配置
+    # 导出时 baseUrl/apiKey 已被清洗为 env: 占位符（绝不含真实密钥），此处从环境变量取，留空回落全局
+    # 优先级：运行时注入的每智能体配置（/api/config） > 节点自定义 > 全局
+    node_id = (node or {}).get('id')
+    injected = (config.get('_node_models') or {}).get(node_id) if node_id else None
+    m = (node or {}).get('model') or {}
+    out = config
+    if m and m.get('inherit') is False:
+        def pick(raw, env_name, fb):
+            if raw is None or raw == '':
+                return fb
+            if isinstance(raw, str) and raw.startswith('env:'):
+                return os.environ.get(env_name) or fb or ''
+            return raw
+        out = {
+            'base_url': pick(m.get('baseUrl'), 'LLM_BASE_URL', config.get('base_url')),
+            'api_key': pick(m.get('apiKey'), 'LLM_API_KEY', config.get('api_key')),
+            'model': pick(m.get('model'), 'LLM_MODEL', config.get('model')),
+            'max_tokens': config.get('max_tokens'),
+            'temperature': config.get('temperature', 0.7),
+        }
+    if injected:
+        out = dict(out)
+        for k in ('base_url', 'api_key', 'model'):
+            v = injected.get(k)
+            if v:
+                out[k] = v
+    return out
+
 def run_agent(agent, config, user_message, registry, session=None):
     messages = [{'role': 'system', 'content': agent.get('systemPrompt') or ''}]
     if session and session.get('messages'):
@@ -148,7 +178,7 @@ def _node_tool_agent(manifest, node, config, registry, message):
     node_tools = [t for t in (node.get('tools') or []) if t]
     if node_tools:
         eff_agent['tools'] = list(dict.fromkeys(list(agent.get('tools') or []) + node_tools))
-    return run_agent(eff_agent, config, message, registry, None)
+    return run_agent(eff_agent, resolve_node_config(manifest, node, config), message, registry, None)
 
 def run_graph(manifest, nodes, edges, config, user_message, registry, stack):
     # 单次图执行：返回 {'outputs': {...}, 'finals': [...]}；子智能体节点递归调用
@@ -201,7 +231,7 @@ def run_graph(manifest, nodes, edges, config, user_message, registry, stack):
                 continue
             stack.add(sub_id)
             try:
-                sub_res = run_graph(manifest, sub.get('nodes') or [], sub.get('edges') or [], config, '\n\n'.join(upstream), registry, stack)
+                sub_res = run_graph(manifest, sub.get('nodes') or [], sub.get('edges') or [], resolve_node_config(manifest, node, config), '\n\n'.join(upstream), registry, stack)
             finally:
                 stack.discard(sub_id)
             outputs[node_id] = '\n\n---\n\n'.join(sub_res['finals'])
@@ -328,7 +358,7 @@ def run_graph(manifest, nodes, edges, config, user_message, registry, stack):
                                 parts.append(input_txt)
                             if not parts:
                                 parts.append('（无上游输入，请补充输入或连线）')
-                            out = run_agent(dict(agent), config, '\n\n'.join(parts), registry, None)
+                            out = run_agent(dict(agent), resolve_node_config(manifest, att_node, config), '\n\n'.join(parts), registry, None)
                             cur = filter_write_zones(out, write_zones)
                         elif att_node.get('type') == 'memory':
                             # 记忆节点挂接：写接口把总线内容写入记忆；读接口把记忆内容读出写回总线
@@ -405,7 +435,7 @@ def run_graph(manifest, nodes, edges, config, user_message, registry, stack):
             parts.extend(filtered)
             if not parts:
                 parts.append('（无上游输入，请补充输入或连线）')
-            content = run_agent(eff_agent, config, '\n\n'.join(parts), registry, None)
+            content = run_agent(eff_agent, resolve_node_config(manifest, node, config), '\n\n'.join(parts), registry, None)
             outputs[node_id] = filter_write_zones(content, write_zones)
     finals = []
     for n in nodes:

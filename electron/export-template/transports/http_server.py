@@ -23,6 +23,23 @@ def handle_chat(manifest, config, body):
     result = run_la(manifest, config, message, body.get('sessionId'), config.get('_sessions'))
     return 200, result
 
+def agent_nodes(manifest):
+    # 导出物里可被单独注入模型的"智能体"节点（顶层图的 skill / bus / subagent / 自定义模型节点）
+    nodes = (manifest.get('agent') or {}).get('nodes') or []
+    out = []
+    for n in nodes:
+        if not n or not n.get('id'):
+            continue
+        t = n.get('type')
+        if t in ('skill', 'bus', 'subagent') or n.get('model'):
+            out.append({
+                'id': n.get('id'),
+                'label': n.get('label') or t,
+                'type': t,
+                'custom': bool(n.get('model') and n.get('model', {}).get('inherit') is False),
+            })
+    return out
+
 def make_handler(manifest, config):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -49,13 +66,14 @@ def make_handler(manifest, config):
         def do_GET(self):
             if self.path == '/v1/health' or self.path == '/api/health':
                 return self._send(200, {'ok': True, 'name': manifest.get('name')})
-            if self.path == '/v1/config':
-                # 首次运行配置状态（不回传已保存的 api_key，只给 hasKey）
+            if self.path in ('/v1/config', '/api/config'):
+                # 配置状态（不回传已保存的 api_key，只给 hasKey）+ 可注入的智能体节点清单
                 return self._send(200, {
                     'configured': bool(config.get('base_url') and config.get('api_key')),
                     'baseUrl': config.get('base_url') or '',
                     'model': config.get('model') or '',
                     'hasKey': bool(config.get('api_key')),
+                    'agents': agent_nodes(manifest),
                 })
             if self.path in ('/', '/index.html'):
                 fp = os.path.join(ROOT, 'web', 'index.html')
@@ -72,7 +90,7 @@ def make_handler(manifest, config):
 
         def do_POST(self):
             # 首次配置页无需鉴权（本地首次设置）；其余接口需令牌
-            if self.path == '/v1/config':
+            if self.path in ('/v1/config', '/api/config'):
                 return self._save_config()
             if not check_auth(self, manifest):
                 return self._send(401, {'error': '未授权：请携带 Authorization: Bearer <token>'})
@@ -100,17 +118,44 @@ def make_handler(manifest, config):
             base_url = str(body.get('base_url') or body.get('baseUrl') or '').strip()
             api_key = str(body.get('api_key') or body.get('apiKey') or '').strip()
             model = str(body.get('model') or '').strip()
-            if not base_url:
-                return self._send(400, {'error': 'Base URL 不能为空'})
-            if not api_key:
-                return self._send(400, {'error': 'API Key 不能为空'})
+            if base_url or api_key:
+                if not base_url:
+                    return self._send(400, {'error': 'Base URL 不能为空'})
+                if not api_key:
+                    return self._send(400, {'error': 'API Key 不能为空'})
+            # 每智能体注入：agents: { nodeId: { base_url?, api_key?, model? } }
+            agents_map = body.get('agents')
+            if agents_map is not None and not isinstance(agents_map, dict):
+                return self._send(400, {'error': 'agents 必须是 { 节点ID: {base_url, api_key, model} } 对象'})
             from executor import config as cfgmod
             data_root = config.get('_data_root') or cfgmod.data_root()
-            cfgmod.save_file_config(data_root, {'base_url': base_url, 'api_key': api_key, 'model': model})
-            config['base_url'] = base_url
-            config['api_key'] = api_key
-            config['model'] = model
-            return self._send(200, {'ok': True})
+            old_cfg = cfgmod.load_file_config(data_root)
+            # 合并旧配置：保留未提交的全局字段与每智能体配置
+            base_cfg = dict(old_cfg)
+            if base_url:
+                base_cfg['base_url'] = base_url
+            if api_key:
+                base_cfg['api_key'] = api_key
+            if model:
+                base_cfg['model'] = model
+            old_agents = old_cfg.get('agents') if isinstance(old_cfg.get('agents'), dict) else {}
+            merged_agents = dict(old_agents)
+            if agents_map is not None:
+                for k, v in agents_map.items():
+                    if v is None:
+                        merged_agents.pop(k, None)
+                    else:
+                        merged_agents[k] = v
+            cfgmod.save_injected_config(data_root, base_cfg, merged_agents)
+            # 更新内存配置
+            if base_url:
+                config['base_url'] = base_url
+            if api_key:
+                config['api_key'] = api_key
+            if model:
+                config['model'] = model
+            config['_node_models'] = merged_agents
+            return self._send(200, {'ok': True, 'agents': agent_nodes(manifest)})
 
     return Handler
 

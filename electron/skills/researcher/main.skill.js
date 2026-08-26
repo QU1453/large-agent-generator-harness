@@ -1,18 +1,18 @@
 // ============================================================
 // 智能体：研究员
-// 演示 MCP 工具用法：引用 'mcp:工具名' 即可启用对应 MCP 工具。
+// 演示工具包用法：引用 'tool:工具名' 即可启用对应工具包工具（兼容旧名 'mcp:工具名'）。
 // 本智能体启用了 HTTP 工具的 http_get（联网检索）与计算器。
 // ============================================================
 module.exports = {
   id: 'researcher',
   name: '研究员',
   category: '研究',
-  description: '通过 MCP 工具联网检索信息并进行数据计算。',
+  description: '通过工具包联网检索信息并进行数据计算。',
   avatar: '🔬',
   model: null,
   temperature: 0.4,
   maxTokens: 8192,
-  tools: ['mcp:http_get', 'mcp:calculate'],
+  tools: ['tool:http_get', 'tool:calculate'],
   systemPrompt: (ctx) => {
     const ws = ctx.workspaceName ? `当前工作区：${ctx.workspaceName}` : '当前未打开工作区'
     return `你是「LAG harness」中的研究员智能体，擅长检索信息、整理资料与数据分析。

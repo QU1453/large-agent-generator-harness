@@ -45,9 +45,9 @@
         "filter": ["**/*.skill.js", "**/*.skill.py"]
       },
       {
-        "from": "electron/mcps",
-        "to": "builtin-mcps",
-        "filter": ["**/*.mcp.js", "**/*.mcp.py"]
+        "from": "electron/tool-packs",
+        "to": "builtin-tool-packs",
+        "filter": ["**/*.tool.js", "**/*.tool.py", "**/*.mcp.js", "**/*.mcp.py"]
       },
       {
         "from": "runtime/python",

@@ -180,6 +180,144 @@ function createAgentStore(userDataDir) {
   }
 }
 
+// ---------------- 智能体定义（data/agent-defs）----------------
+// 「智能体」栏：单智能体 = 模型配置（继承/自定义）+ 提示词 + 技能列表 + 工具列表。
+// 工作流（画布）里的子智能体节点可直接引用智能体定义，运行时把定义转成最小图执行。
+function createAgentDefStore(userDataDir) {
+  const dir = path.join(userDataDir, 'agent-defs')
+  fs.mkdirSync(dir, { recursive: true })
+  const fileOf = (id) => path.join(dir, `${id}.json`)
+  const catsFile = path.join(dir, 'categories.json')
+  let catList = []
+  let catMap = {}
+  const loadCats = () => {
+    catList = []; catMap = {}
+    if (!fs.existsSync(catsFile)) return
+    try {
+      const d = JSON.parse(fs.readFileSync(catsFile, 'utf8'))
+      catList = Array.isArray(d.list) ? d.list.filter(Boolean) : []
+      if (d.map && typeof d.map === 'object') catMap = d.map
+    } catch { /* 忽略 */ }
+  }
+  const saveCats = () => {
+    try { fs.writeFileSync(catsFile, JSON.stringify({ list: catList, map: catMap }, null, 2), 'utf8') } catch { /* 忽略 */ }
+  }
+  const catResult = () => {
+    const used = new Set(Object.values(catMap))
+    const merged = [...catList]
+    for (const u of used) if (!merged.includes(u)) merged.push(u)
+    return { list: merged, map: { ...catMap } }
+  }
+  loadCats()
+  const list = () => {
+    const items = []
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json') || name === 'categories.json') continue
+      try {
+        const a = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))
+        items.push({
+          id: a.id,
+          name: a.name,
+          description: a.description || '',
+          category: catMap[a.id] || '未分类',
+          updatedAt: a.updatedAt || 0,
+          skillCount: Array.isArray(a.skills) ? a.skills.length : 0,
+          model: a.model || null
+        })
+      } catch { /* 忽略 */ }
+    }
+    return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  }
+  return {
+    list,
+    get(id) {
+      try {
+        const d = JSON.parse(fs.readFileSync(fileOf(id), 'utf8'))
+        return d && typeof d === 'object' ? d : null
+      } catch { return null }
+    },
+    create() {
+      const now = Date.now()
+      const def = {
+        id: crypto.randomUUID(),
+        name: '新智能体',
+        description: '',
+        model: { inherit: true },
+        systemPrompt: '',
+        skills: [],
+        tools: [],
+        createdAt: now,
+        updatedAt: now
+      }
+      this.save(def)
+      return def
+    },
+    save(def) {
+      def.updatedAt = Date.now()
+      fs.writeFileSync(fileOf(def.id), JSON.stringify(def, null, 2), 'utf8')
+      return def
+    },
+    remove(id) {
+      try { fs.unlinkSync(fileOf(id)) } catch { /* 忽略 */ }
+    },
+    listCategories: catResult,
+    addCategory(name) {
+      const n = String(name || '').trim()
+      if (!n) throw new Error('分类名不能为空')
+      if (!catList.includes(n)) catList.push(n)
+      saveCats()
+      return catResult()
+    },
+    setCategory(id, name) {
+      const n = String(name || '').trim()
+      if (!n) throw new Error('分类名不能为空')
+      if (!catList.includes(n)) catList.push(n)
+      if (n === '未分类') delete catMap[id]
+      else catMap[id] = n
+      saveCats()
+      return catResult()
+    },
+    removeCategory(name) {
+      const n = String(name || '').trim()
+      if (!n) throw new Error('分类名不能为空')
+      if (n === '未分类') throw new Error('「未分类」是默认分组，不能删除')
+      catList = catList.filter((c) => c !== n)
+      for (const k of Object.keys(catMap)) if (catMap[k] === n) delete catMap[k]
+      saveCats()
+      return catResult()
+    }
+  }
+}
+
+// 智能体定义 → 可运行最小图（input → 各技能 → merge → output）
+// 供工作流子智能体节点引用；定义里的 systemPrompt 作为技能节点附加指令，model 配置透传到各技能节点
+function defToGraph(def) {
+  const skills = Array.isArray(def.skills) && def.skills.length ? def.skills : ['assistant']
+  const prefix = def.id
+  const now = Date.now()
+  const nodes = [
+    { id: `${prefix}:in`, type: 'input', label: '输入', text: '', x: 60, y: 160, w: 180, h: 120 },
+    ...skills.map((s, i) => ({
+      id: `${prefix}:s${i}`,
+      type: 'skill',
+      label: '技能',
+      skillId: s,
+      prompt: def.systemPrompt ? String(def.systemPrompt) : '',
+      x: 300 + i * 220,
+      y: 80,
+      w: 200,
+      h: 200,
+      model: def.model && def.model.inherit === false ? { ...def.model } : undefined
+    })),
+    { id: `${prefix}:out`, type: 'output', label: '输出', x: 620 + (skills.length - 1) * 220, y: 160, w: 180, h: 120 }
+  ]
+  const edges = [
+    ...skills.map((s, i) => ({ id: `${prefix}:e${i}`, from: `${prefix}:in`, to: `${prefix}:s${i}`, type: 'data' })),
+    ...skills.map((s, i) => ({ id: `${prefix}:e2${i}`, from: `${prefix}:s${i}`, to: `${prefix}:out`, type: 'data' }))
+  ]
+  return { id: def.id, name: def.name || '智能体', nodes, edges }
+}
+
 // ---------------- 通信总线 ----------------
 // 文本标记语法：[[区域名]] ...内容... [[/区域名]]
 // 节点可声明 readZones（可读区域）与 writeZones（可写区域）：
@@ -246,6 +384,7 @@ function filterWriteZones(text, writeZones) {
 //   endpoint    对外端点 URL（skill card 的 endpoint 字段，可留空）
 //   auth        { type: 'none'|'token'|'hmac', secret }  凭证处理（共享密钥）
 //   access      { allowedPeers: [], deniedPeers: [] }    访问控制（允许/拒绝的 skill id）
+//                { allowedTools: [], deniedTools: [] }   工具级访问控制（P4-1：pre-execute 拦截）
 //   audit       是否写审计日志（协议运行轨迹留痕）
 // 运行时：上游消息按协议封装（envelope），先做访问控制校验，再交 LLM；
 // 结果同样按协议输出。审计记录写到 <userData>/audit/<agentId>.jsonl。
@@ -264,7 +403,9 @@ function normalizeProtocol(node) {
     },
     access: {
       allowedPeers: Array.isArray(access.allowedPeers) ? access.allowedPeers.map(String) : [],
-      deniedPeers: Array.isArray(access.deniedPeers) ? access.deniedPeers.map(String) : []
+      deniedPeers: Array.isArray(access.deniedPeers) ? access.deniedPeers.map(String) : [],
+      allowedTools: Array.isArray(access.allowedTools) ? access.allowedTools.map(String) : [],
+      deniedTools: Array.isArray(access.deniedTools) ? access.deniedTools.map(String) : []
     },
     audit: p.audit !== false
   }
@@ -336,6 +477,21 @@ function evalCond(cond, text) {
   m = c.match(/^not\s+contains\s+(.+)$/)
   if (m) return !s.includes(m[1].trim())
   return true
+}
+
+// 解析节点级模型配置：节点 model.inherit=false 且有自定义值 → 用节点配置（缺字段回落上游）
+// 否则返回 fallback（会话/全局模型配置）。保证导出后不含 key（导出侧做清洗）。
+function resolveNodeModel(node, fallback) {
+  const m = node && node.model
+  if (m && m.inherit === false && (m.baseUrl || m.apiKey || m.model)) {
+    const fb = fallback || {}
+    return {
+      baseUrl: (m.baseUrl || '').trim() || fb.baseUrl || undefined,
+      apiKey: (m.apiKey || '').trim() || fb.apiKey || undefined,
+      model: (m.model || '').trim() || fb.model || undefined
+    }
+  }
+  return fallback
 }
 
 // Kahn 拓扑排序；返回有序节点 id 列表，若有环抛出错误
@@ -488,7 +644,12 @@ async function runAgentInner(opts) {
         fail(`检测到智能体循环引用: ${subId}`)
         return
       }
-      const sub = agentStore.get(subId)
+      let sub = agentStore.get(subId)
+      // 工作流中没有 → 尝试智能体定义（data/agent-defs，单智能体转最小图）
+      if (!sub && typeof agentStore.getDef === 'function') {
+        const def = agentStore.getDef(subId)
+        if (def) sub = defToGraph(def)
+      }
       if (!sub) {
         fail(`子智能体不存在: ${subId}`)
         return
@@ -503,7 +664,7 @@ async function runAgentInner(opts) {
           agent: sub,
           agentStore,
           settings,
-          model: opts.model,
+          model: resolveNodeModel(node, opts.model),
           inputs: subInputs,
           signal,
           stack,
@@ -740,7 +901,7 @@ async function runAgentInner(opts) {
                 skillId,
                 skillOverride: { ...busSkill },
                 settings,
-                model: opts.model,
+                model: resolveNodeModel(attNode, opts.model),
                 userMessage: parts.join('\n\n'),
                 historyMessages: [],
                 session,
@@ -899,16 +1060,30 @@ async function runAgentInner(opts) {
       onStatus({ runId, nodeId, status: 'running' })
       try {
         const session = { id: `ag-${agent.id}-${nodeId}-${runId}`, messages: [] }
+        // P4-1 工具管道上下文：记忆绑定 + A2A 协议工具级访问控制（pre-execute 拦截）+ 审计溯源
+        const pipeCtx = {}
+        if (memFiles.length) pipeCtx.memoryFiles = memFiles
+        if (proto) {
+          pipeCtx.protocol = {
+            identity: proto.identity,
+            version: proto.version,
+            allowedTools: proto.access.allowedTools,
+            deniedTools: proto.access.deniedTools
+          }
+          pipeCtx.agentId = agent.id
+          pipeCtx.nodeId = nodeId
+          pipeCtx.skillId = node.skillId
+        }
         const result = await chat.runChat({
           skillId: node.skillId,
           skillOverride,
           settings,
-          model: opts.model,
+          model: resolveNodeModel(node, opts.model),
           userMessage,
           historyMessages: [],
           session,
           signal,
-          toolContext: memFiles.length ? { memoryFiles: memFiles } : undefined,
+          toolContext: Object.keys(pipeCtx).length ? pipeCtx : undefined,
           onToken: (t) => onToken({ nodeId, ...t }),
           onTool: () => {},
           onStatus: () => {}
@@ -976,4 +1151,4 @@ async function runAgentInner(opts) {
   return { runId, result: finals.join('\n\n---\n\n'), outputs: Object.fromEntries(outputs) }
 }
 
-module.exports = { createAgentStore, runAgent, sanitizeAgent }
+module.exports = { createAgentStore, createAgentDefStore, defToGraph, runAgent, sanitizeAgent }

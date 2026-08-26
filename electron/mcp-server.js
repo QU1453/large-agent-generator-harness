@@ -10,7 +10,7 @@ const crypto = require('crypto')
 const path = require('path')
 const fs = require('fs')
 
-let deps = null // { getSettings, agentStore, agent, skills, mcp, memory, runPythonFile }
+let deps = null // { getSettings, agentStore, agent, skills, toolPacks, memory, runPythonFile }
 const sessions = new Map() // sessionId -> SSE response（保持的连接）
 
 const SERVER_INFO = { name: 'LAG harness MCP', version: '0.1.0' }
@@ -124,8 +124,8 @@ async function execTool(name, args) {
       return await deps.runPythonFile(file)
     }
     case 'list_mcp_tools': {
-      const r = await deps.mcp.list()
-      const packs = r.mcps || []
+      const r = await deps.toolPacks.list()
+      const packs = r.toolPacks || []
       if (!packs.length) return '暂无内置工具包。'
       const lines = []
       for (const p of packs) {
@@ -137,7 +137,7 @@ async function execTool(name, args) {
       return lines.join('\n')
     }
     case 'call_mcp_tool': {
-      const value = await deps.mcp.execTool(String(args.name || ''), args.args || {})
+      const value = await deps.toolPacks.execTool(String(args.name || ''), args.args || {})
       return String(value == null ? '' : value)
     }
     case 'memory_read': {
@@ -246,8 +246,8 @@ async function onMessage(req, res, url) {
   req.on('error', () => {})
 }
 
-function init({ getSettings, agentStore, agent, skills, mcp, memory, runPythonFile, auditDir }) {
-  deps = { getSettings, agentStore, agent, skills, mcp, memory, runPythonFile, auditDir }
+function init({ getSettings, agentStore, agent, skills, toolPacks, memory, runPythonFile, auditDir }) {
+  deps = { getSettings, agentStore, agent, skills, toolPacks, memory, runPythonFile, auditDir }
 }
 
 module.exports = { init, onSse, onMessage, MCP_TOOLS }

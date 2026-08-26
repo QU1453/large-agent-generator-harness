@@ -259,7 +259,7 @@ export default function TeamPanel({ onToast, skillCount = 0, agentCount = 0, mem
         {[
           { key: 'skills', kind: 'skill', icon: '🎯', label: '技能' },
           { key: 'agents', kind: 'agent', icon: '🌀', label: '智能体' },
-          { key: 'mcps', kind: 'mcp', icon: '🔧', label: '工具' },
+          { key: 'mcps', kind: 'toolPack', icon: '🔧', label: '工具' },
           { key: 'memories', kind: 'memory', icon: '🧠', label: '记忆' }
         ].map((g) => {
           const list = (assets && assets[g.key]) || []

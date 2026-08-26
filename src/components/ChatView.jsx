@@ -220,7 +220,7 @@ export default function ChatView({
               ))}
             </div>
             {agents.length === 0 && (
-              <div className="chip-hint">暂无智能体，请到「智能体」页新建</div>
+              <div className="chip-hint">暂无工作流，请到「工作流」页新建</div>
             )}
             <div className="chip-hint">点击快速开始 · 可在下方随时切换</div>
           </div>

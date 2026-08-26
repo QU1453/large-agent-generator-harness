@@ -1,10 +1,11 @@
-// 工具执行器：内置工作区工具 + 记忆工具 + 智能体工具 + MCP 工具
+// 工具执行器：内置工作区工具 + 记忆工具 + 智能体工具 + 工具包工具
 // LLM 函数名规则：内置工具用原名（list_dir/read_file/write_file/run_agent/memory_*），
-// MCP 工具用 `mcp_<toolName>`（LLM 对函数名只允许字母数字下划线）
+// 工具包工具用 `tool_<toolName>`（LLM 对函数名只允许字母数字下划线；兼容旧名 `mcp_<toolName>`）
 const fs = require('fs')
 const path = require('path')
 const workspace = require('./workspace')
-const mcp = require('./mcp')
+const toolPacks = require('./tool-packs')
+const mcpClient = require('./mcp-client')
 const memory = require('./memory')
 
 // 智能体运行时（由 main.js 注入：agentStore + settings）
@@ -12,6 +13,88 @@ let runtime = { agentStore: null, getSettings: () => ({}) }
 function registerAgentRuntime(r) {
   runtime = { ...runtime, ...r }
 }
+
+// ---------------- 工具执行管道（P4-1）：注册式中间件 ----------------
+// pre-execute:  async (info) => ({ allow: false, reason }) 拒绝执行；返回其他/undefined 放行
+//              可原地修改 info.args 做参数规范；异常视为拒绝（fail-closed）
+// post-execute: async (info) => 返回字符串则替换/丰富 info.result（如注入摘要、脱敏）
+// info = { name, args, ctx, result, ok, error, durationMs }
+const HOOKS = { 'pre-execute': [], 'post-execute': [] }
+
+// 注册中间件，返回注销函数（注册即 Effect：可逆）
+function hook(name, fn) {
+  if (!HOOKS[name]) throw new Error('未知工具钩子: ' + name)
+  HOOKS[name].push(fn)
+  return () => {
+    const i = HOOKS[name].indexOf(fn)
+    if (i >= 0) HOOKS[name].splice(i, 1)
+  }
+}
+
+// 审计消费者（main.js 启动时安装）：所有工具调用统一写 data/audit/tools.jsonl
+let auditDir = null
+function installAudit(dir) {
+  auditDir = dir || null
+  return hook('post-execute', (info) => {
+    if (!auditDir) return
+    try {
+      fs.mkdirSync(auditDir, { recursive: true })
+      const ctx = info.ctx || {}
+      const record = {
+        ts: Date.now(),
+        name: info.name,
+        args: String(JSON.stringify(info.args || {})).slice(0, 500),
+        ok: info.ok,
+        error: info.error || undefined,
+        result: info.ok ? String(info.result || '').slice(0, 500) : undefined,
+        durationMs: info.durationMs,
+        sessionId: ctx.sessionId || undefined,
+        agentId: ctx.agentId || undefined,
+        nodeId: ctx.nodeId || undefined,
+        skillId: ctx.skillId || undefined,
+        protocol: ctx.protocol ? ctx.protocol.identity : undefined
+      }
+      fs.appendFileSync(path.join(auditDir, 'tools.jsonl'), JSON.stringify(record) + '\n', 'utf8')
+    } catch { /* 审计失败不阻塞工具执行 */ }
+  })
+}
+
+// A2A 访问控制消费者（默认安装）：协议声明了 allowedTools/deniedTools 时，工具调用在 pre-execute 被拦截
+hook('pre-execute', (info) => {
+  const proto = info.ctx && info.ctx.protocol
+  if (!proto) return undefined
+  const denied = proto.deniedTools || []
+  const allowed = proto.allowedTools || []
+  if (denied.includes(info.name)) {
+    return { allow: false, reason: `工具 ${info.name} 被协议「${proto.identity}」拒绝（deniedTools）` }
+  }
+  if (allowed.length && !allowed.includes(info.name)) {
+    return { allow: false, reason: `工具 ${info.name} 不在协议「${proto.identity}」允许名单（allowedTools: ${allowed.join(',')}）` }
+  }
+  return undefined
+})
+
+// 记忆消费者（默认安装）：节点绑定了记忆架构时，工具调用自动记入该记忆空间的 ledger 账本（溯源）
+// 跳过 memory_* 工具（它们自身已写账本），避免重复记录
+hook('post-execute', (info) => {
+  const files = (info.ctx && info.ctx.memoryFiles) || []
+  if (!files.length || String(info.name).startsWith('memory_')) return
+  try {
+    const ts = new Date().toISOString().slice(0, 16).replace('T', ' ')
+    for (const f of files) {
+      const cfg = memory.loadConfigAt(f.dir)
+      if (cfg.ledger === false) continue
+      const lp = path.join(f.dir, memory.FILE_NAMES.ledger)
+      fs.mkdirSync(path.dirname(lp), { recursive: true })
+      const cur = fs.existsSync(lp) ? fs.readFileSync(lp, 'utf8') : ''
+      const summary = info.ok
+        ? String(info.result || '').replace(/\s+/g, ' ').slice(0, 40)
+        : (info.error || '').slice(0, 40)
+      const line = `| ${ts} | tool | ${info.name} | ${summary} |`
+      fs.writeFileSync(lp, (cur ? cur.replace(/\s*$/, '') + '\n' : '') + line + '\n', 'utf8')
+    }
+  } catch { /* 记忆记录失败不阻塞工具执行 */ }
+})
 
 function parseArgs(rawArgs) {
   let args = {}
@@ -25,51 +108,88 @@ function parseArgs(rawArgs) {
   return args
 }
 
+// 工具分发（管道 execute 阶段）：工具包工具 + 外部 MCP 工具 + 内置工具 + 记忆工具
+function _dispatch(name, args, ctx) {
+  // 外部 MCP 工具分发（LLM 函数名带 ext_ 前缀）
+  if (name.startsWith('ext_')) {
+    const toolName = name.slice(4)
+    return mcpClient.execTool(toolName, args)
+  }
+  // 工具包工具分发（LLM 函数名带 tool_ 前缀；兼容旧名 mcp_）
+  if (name.startsWith('tool_') || name.startsWith('mcp_')) {
+    const toolName = name.slice(name.indexOf('_') + 1)
+    if (!toolPacks.findTool(toolName)) {
+      return Promise.resolve(JSON.stringify({ error: `工具包工具不存在: ${toolName}` }))
+    }
+    return toolPacks.execTool(toolName, args)
+  }
+  // 内置工作区工具
+  switch (name) {
+    case 'list_dir': {
+      const list = workspace.listDir(args.path || '.')
+      return Promise.resolve(JSON.stringify(list, null, 2).slice(0, 8000))
+    }
+    case 'read_file': {
+      if (!args.path) throw new Error('缺少 path 参数')
+      return Promise.resolve(workspace.readFile(args.path))
+    }
+    case 'write_file': {
+      if (!args.path || typeof args.content !== 'string') throw new Error('缺少 path/content 参数')
+      workspace.writeFile(args.path, args.content)
+      return Promise.resolve(JSON.stringify({ ok: true, path: args.path, message: '文件已写入' }))
+    }
+    case 'run_agent': {
+      return runAgentTool(args)
+    }
+    case 'memory_read':
+    case 'memory_write':
+    case 'memory_append':
+    case 'memory_search':
+    case 'memory_forget': {
+      return Promise.resolve(memoryTool(name, args, ctx))
+    }
+    default:
+      return Promise.resolve(JSON.stringify({ error: '未知工具: ' + name }))
+  }
+}
+
 async function execTool(name, rawArgs, ctx) {
   const args = parseArgs(rawArgs)
   if (args.__parse_error__) {
     return JSON.stringify({ error: '参数解析失败: ' + args.__parse_error__ })
   }
+  const started = Date.now()
+  // pre-execute 管道：允许/拒绝（fail-closed：钩子抛异常视为拒绝）
   try {
-    // MCP 工具分发
-    if (name.startsWith('mcp_')) {
-      const toolName = name.slice(4)
-      if (!mcp.findTool(toolName)) {
-        return JSON.stringify({ error: `MCP 工具不存在: ${toolName}` })
+    for (const h of [...HOOKS['pre-execute']]) {
+      const d = await h({ name, args, ctx })
+      if (d && d.allow === false) {
+        return JSON.stringify({ error: d.reason || `工具 ${name} 被拒绝` })
       }
-      return await mcp.execTool(toolName, args)
-    }
-    // 内置工作区工具
-    switch (name) {
-      case 'list_dir': {
-        const list = workspace.listDir(args.path || '.')
-        return JSON.stringify(list, null, 2).slice(0, 8000)
-      }
-      case 'read_file': {
-        if (!args.path) throw new Error('缺少 path 参数')
-        return workspace.readFile(args.path)
-      }
-      case 'write_file': {
-        if (!args.path || typeof args.content !== 'string') throw new Error('缺少 path/content 参数')
-        workspace.writeFile(args.path, args.content)
-        return JSON.stringify({ ok: true, path: args.path, message: '文件已写入' })
-      }
-      case 'run_agent': {
-        return await runAgentTool(args)
-      }
-      case 'memory_read':
-      case 'memory_write':
-      case 'memory_append':
-      case 'memory_search':
-      case 'memory_forget': {
-        return memoryTool(name, args, ctx)
-      }
-      default:
-        return JSON.stringify({ error: '未知工具: ' + name })
     }
   } catch (e) {
-    return JSON.stringify({ error: e.message || String(e) })
+    return JSON.stringify({ error: `工具 ${name} 被拦截（pre-execute 异常）: ${e.message || e}` })
   }
+  // execute
+  let result = ''
+  let ok = false
+  let error = ''
+  try {
+    result = await _dispatch(name, args, ctx)
+    ok = true
+  } catch (e) {
+    error = e.message || String(e)
+    result = JSON.stringify({ error })
+  }
+  // post-execute 管道：替换/丰富/记录
+  const info = { name, args, ctx, result, ok, error, durationMs: Date.now() - started }
+  try {
+    for (const h of [...HOOKS['post-execute']]) {
+      const r = await h(info)
+      if (typeof r === 'string') info.result = r
+    }
+  } catch { /* 后置钩子异常不吞掉工具结果 */ }
+  return info.result
 }
 
 // 记忆工具：操作当前节点绑定的记忆架构目录（toolContext.memoryFiles）
@@ -221,4 +341,4 @@ async function runAgentTool(args) {
   return JSON.stringify({ agentId: ag.id, agentName: ag.name, result: (res.result || '').slice(0, 8000) }, null, 2)
 }
 
-module.exports = { execTool, registerAgentRuntime, runAgentTool }
+module.exports = { execTool, registerAgentRuntime, runAgentTool, hook, installAudit }
