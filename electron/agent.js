@@ -416,8 +416,11 @@ function createAgentDefStore(userDataDir) {
 
 // 智能体定义 → 可运行最小图（input → 各技能 → merge → output）
 // 供工作流子智能体节点引用；定义里的 systemPrompt 作为技能节点附加指令，model 配置透传到各技能节点
+// tools/memories：定义级的工具与记忆绑定会传递到每个技能节点（工具并入节点工具、记忆并入节点记忆）
 function defToGraph(def) {
   const skills = Array.isArray(def.skills) && def.skills.length ? def.skills : ['assistant']
+  const defTools = Array.isArray(def.tools) ? def.tools : []
+  const defMemories = Array.isArray(def.memories) ? def.memories : []
   const prefix = def.id
   const now = Date.now()
   const nodes = [
@@ -428,6 +431,8 @@ function defToGraph(def) {
       label: '技能',
       skillId: s,
       prompt: def.systemPrompt ? String(def.systemPrompt) : '',
+      tools: defTools.length ? [...defTools] : undefined,
+      memories: defMemories.length ? [...defMemories] : undefined,
       x: 300 + i * 220,
       y: 80,
       w: 200,

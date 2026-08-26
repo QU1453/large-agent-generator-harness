@@ -84,17 +84,20 @@ const MCP_TOOLS = [
       name: { type: 'string', description: '技能显示名' },
       description: { type: 'string', description: '技能用途描述（带 when to use）' },
       systemPrompt: { type: 'string', description: '可选，系统提示词（默认按描述生成）' },
+      tools: { type: 'array', description: '可选，技能可用工具引用列表（如 ["tool:motor_connect","tool:mem_route"]；默认 list_dir/read_file/write_file）' },
       category: { type: 'string', description: '可选，归入技能分类文件夹（自动创建）' }
     },
     ['id', 'name', 'description']
   ),
-  tool('create_agent', '创建一个智能体定义（「智能体」栏：模型继承/自定义 + 提示词 + 技能列表）。返回智能体 id。',
+  tool('create_agent', '创建一个智能体定义（「智能体」栏：模型继承/自定义 + 提示词 + 技能列表 + 工具 + 记忆）。返回智能体 id。',
     {
       id: { type: 'string', description: '智能体 id（字母数字下划线，如 current_agent）' },
       name: { type: 'string', description: '智能体显示名' },
       description: { type: 'string', description: '用途说明' },
       systemPrompt: { type: 'string', description: '可选，系统提示词' },
-      skills: { type: 'array', description: '可选，绑定技能 id 列表' },
+      skills: { type: 'array', description: '可选，绑定技能 id 列表（如 ["current_loop"]）' },
+      tools: { type: 'array', description: '可选，绑定工具引用列表（如 ["tool:motor_connect","tool:mem_route"]）' },
+      memories: { type: 'array', description: '可选，绑定记忆架构名列表（如 ["pid-tuning"]，自动注入记忆工具与策略提示）' },
       category: { type: 'string', description: '可选，归入智能体分类文件夹' }
     },
     ['id', 'name']
@@ -110,7 +113,29 @@ const MCP_TOOLS = [
     ['id', 'name', 'nodes', 'edges']
   ),
   tool('list_workflows', '列出所有画布工作流：id、名称、节点数。', {}),
-  tool('list_agent_defs', '列出「智能体」栏的智能体定义：id、名称、技能数。', {})
+  tool('list_agent_defs', '列出「智能体」栏的智能体定义：id、名称、技能数。', {}),
+  tool('update_agent', '更新一个已存在的智能体定义（可改名称/描述/提示词/技能/工具/记忆）。',
+    {
+      id: { type: 'string', description: '要更新的智能体 id' },
+      name: { type: 'string', description: '可选，新名称' },
+      description: { type: 'string', description: '可选，新用途说明' },
+      systemPrompt: { type: 'string', description: '可选，新系统提示词' },
+      skills: { type: 'array', description: '可选，技能 id 列表' },
+      tools: { type: 'array', description: '可选，工具引用列表（如 ["tool:motor_connect"]）' },
+      memories: { type: 'array', description: '可选，记忆架构名列表（如 ["pid-tuning"]）' }
+    },
+    ['id']
+  ),
+  tool('create_protocol', '创建一个 A2A 安全协议（.protocol.py 文件），供画布协议节点作为智能体间通信网关引用。',
+    {
+      name: { type: 'string', description: '协议名（如 pid-handoff）' },
+      desc: { type: 'string', description: '可选，协议说明' },
+      identity: { type: 'string', description: '可选，本协议身份声明（默认协议名）' },
+      allowedPeers: { type: 'array', description: '可选，允许来源 peer 列表（留空=不限制）' },
+      deniedPeers: { type: 'array', description: '可选，拒绝来源 peer 列表' }
+    },
+    ['name']
+  )
 ]
 
 // ---------------- 工具执行 ----------------
@@ -230,6 +255,7 @@ async function execTool(name, args) {
       fs.mkdirSync(dir, { recursive: true })
       const systemPrompt = String(args.systemPrompt || '').trim() ||
         `你是「${name}」。${description}\n\n遵循以下规则执行任务。`
+      const tools = Array.isArray(args.tools) && args.tools.length ? args.tools.filter(Boolean) : ['list_dir', 'read_file', 'write_file']
       const py = `# ============================================================
 # skill：${name}
 # ${description}
@@ -242,7 +268,7 @@ SKILL_MODEL = None
 SKILL_TEMPERATURE = 0.7
 SKILL_MAX_TOKENS = 4096
 
-SKILL_TOOLS = ['list_dir', 'read_file', 'write_file']
+SKILL_TOOLS = ${JSON.stringify(tools, null, 2).replace(/\n/g, '\n    ')}
 
 def system_prompt(ctx):
     return """${systemPrompt.replace(/"/g, '\\"').replace(/`/g, '\\`')}"""
@@ -268,7 +294,8 @@ def system_prompt(ctx):
         model: { inherit: true },
         systemPrompt: String(args.systemPrompt || '').trim(),
         skills: Array.isArray(args.skills) ? args.skills.filter(Boolean) : [],
-        tools: [],
+        tools: Array.isArray(args.tools) ? args.tools.filter(Boolean) : [],
+        memories: Array.isArray(args.memories) ? args.memories.filter(Boolean) : [],
         createdAt: now,
         updatedAt: now
       }
@@ -327,6 +354,55 @@ def system_prompt(ctx):
       const list = deps.defStore ? deps.defStore.list() : []
       if (!list.length) return '暂无智能体定义。'
       return list.map((a) => `- ${a.name} | id=${a.id} | ${a.skillCount || 0} 技能`).join('\n')
+    }
+    case 'update_agent': {
+      const id = String(args.id || '').trim()
+      const cur = deps.defStore.get(id)
+      if (!cur) throw new Error('智能体不存在: ' + id)
+      const patch = {
+        ...cur,
+        name: args.name != null ? String(args.name).trim() : cur.name,
+        description: args.description != null ? String(args.description).trim() : cur.description,
+        systemPrompt: args.systemPrompt != null ? String(args.systemPrompt) : cur.systemPrompt,
+        skills: Array.isArray(args.skills) ? args.skills.filter(Boolean) : cur.skills,
+        tools: Array.isArray(args.tools) ? args.tools.filter(Boolean) : cur.tools,
+        memories: Array.isArray(args.memories) ? args.memories.filter(Boolean) : cur.memories
+      }
+      deps.defStore.save(patch)
+      return `智能体「${patch.name}」已更新 id=${id}（技能 ${(patch.skills || []).length} 个 / 工具 ${(patch.tools || []).length} 个 / 记忆 ${(patch.memories || []).length} 个）`
+    }
+    case 'create_protocol': {
+      const name = String(args.name || '').trim().replace(/[^A-Za-z0-9_\u4e00-\u9fa5-]/g, '_')
+      if (!name) throw new Error('协议名不能为空')
+      const protocols = require('./protocols')
+      let proto = protocols.get(name)
+      if (!proto) proto = protocols.create(name)
+      const identity = String(args.identity || name).trim()
+      const desc = String(args.desc || '').trim()
+      const allowedPeers = Array.isArray(args.allowedPeers) ? args.allowedPeers.map(String) : []
+      const deniedPeers = Array.isArray(args.deniedPeers) ? args.deniedPeers.map(String) : []
+      const content = `# ============================================================
+# 协议：${name}（A2A 安全协议）
+${desc ? `# ${desc}\n` : ''}
+# 画布「协议节点」引用它，运行时作为智能体间通信网关：
+#   访问控制（允许/拒绝来源）→ [[A2A]] 信封封装 → 审计留痕。
+# ============================================================
+PROTOCOL_ENABLED = True
+PROTOCOL_VERSION = "A2A/1.0"
+PROTOCOL_IDENTITY = ${JSON.stringify(identity)}
+PROTOCOL_ENDPOINT = ""
+PROTOCOL_AUTH_TYPE = "none"
+PROTOCOL_AUTH_SECRET = ""
+PROTOCOL_ALLOWED_PEERS = ${JSON.stringify(allowedPeers)}
+PROTOCOL_DENIED_PEERS = ${JSON.stringify(deniedPeers)}
+# 工具级访问控制（可选）：非空时仅放行名单内工具
+PROTOCOL_ALLOWED_TOOLS = []
+PROTOCOL_DENIED_TOOLS = []
+PROTOCOL_AUDIT = True
+`
+      protocols.write(name, content)
+      const meta = protocols.get(name)
+      return `协议「${name}」已创建（identity=${meta.identity}，允许 ${(meta.access.allowedPeers || []).length} / 拒绝 ${(meta.access.deniedPeers || []).length}）`
     }
     default:
       throw new Error('未知 MCP 工具: ' + name)
