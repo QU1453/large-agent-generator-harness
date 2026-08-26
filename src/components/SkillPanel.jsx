@@ -333,6 +333,20 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
     }
   }
 
+  // 切换文件可读性：readable=false 时该文件对 LLM 不可读（仅管理标记，不影响文件内容）
+  const toggleReadable = async (f) => {
+    if (!f) return
+    if (f.main) { onToast?.('主组件文件始终可读', 'error'); return }
+    const next = !(f.readable !== false)
+    try {
+      await h.skills.setFileReadable(id, f.rel, next)
+      onToast?.(`${f.rel} 已${next ? '设为可读' : '设为不可读'}`, 'success')
+      await loadFiles()
+    } catch (e) {
+      onToast?.(e.message || String(e), 'error')
+    }
+  }
+
   const fileIcon = (f) => (f.kind === 'py' ? '🐍' : f.kind === 'js' ? '⚡' : f.kind === 'json' ? '⚙' : '📄')
 
   // 运行技能内的 Python 文件（嵌入式/系统 Python，回显输出）
@@ -359,8 +373,13 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
       <div className="mem-wb-body">
         <div className="mem-wb-tree">
           <div className="mem-wb-tree-title">文件</div>
-          <div className="mem-wb-tree-scroll">
-            {files.length === 0 && <div className="mem-tree-empty">暂无文件</div>}
+          <div className="mem-wb-tree-scroll" onContextMenu={(e) => {
+            // 目录空白处右键 → 新建文件
+            if (!e.target.closest('.mem-tree-item')) {
+              e.preventDefault(); e.stopPropagation(); setCtx(null); setNoteBox(true)
+            }
+          }}>
+            {files.length === 0 && <div className="mem-tree-empty">暂无文件（右键空白处或点「＋ 新建文件」创建）</div>}
             {files.map((f) => (
               <div key={f.rel} className={`mem-tree-item${f.rel === activeRel ? ' active' : ''}`}>
                 <button
@@ -372,6 +391,7 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
                   <span className="mem-tree-icon">{fileIcon(f)}</span>
                   <span className="mem-tree-name">{f.rel}</span>
                   {f.main && <span className="mem-tree-ro">主</span>}
+                  {!f.main && f.readable === false && <span className="mem-tree-ro off" title="不可读（LLM 不读取此文件）">禁</span>}
                 </button>
                 {f.kind === 'py' && (
                   <button className="mem-tree-run" title="用 Python 运行此文件" onClick={() => runFile(f)}>▶</button>
@@ -450,7 +470,8 @@ function SkillWorkbench({ id, skill, onBack, onToast }) {
       {ctx && (
         <div className="mem-ctx-overlay" onClick={() => setCtx(null)} onContextMenu={(e) => { e.preventDefault(); setCtx(null) }}>
           <div className="mem-ctx" style={{ left: ctx.x, top: ctx.y }}>
-            <div className="mem-ctx-title">📄 {ctx.f.rel}</div>
+            <div className="mem-ctx-title">📄 {ctx.f.rel} <span className={ctx.f.readable === false ? 'ctx-state off' : 'ctx-state'}>{ctx.f.readable === false ? '不可读' : '可读'}</span></div>
+            <button className="mem-ctx-item" onClick={() => { const f = ctx.f; setCtx(null); toggleReadable(f) }} disabled={ctx.f.main} title={ctx.f.main ? '主组件文件始终可读' : '切换 LLM 是否可读此文件'}>{ctx.f.readable === false ? '🔓 设为可读' : '🔒 设为不可读'}</button>
             <button className="mem-ctx-item danger" onClick={() => { const f = ctx.f; setCtx(null); deleteFile(f) }} disabled={ctx.f.main || ctx.f.protected} title={ctx.f.main ? '主组件不可删除' : '删除此文件'}>🗑 删除文件</button>
             <button className="mem-ctx-item" onClick={() => setCtx(null)}>取消</button>
           </div>

@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('harness', {
     writeFile: (id, rel, content) => ipcRenderer.invoke('skills:write-file', id, rel, content),
     createFile: (id, rel, content) => ipcRenderer.invoke('skills:create-file', id, rel, content),
     deleteFile: (id, rel) => ipcRenderer.invoke('skills:delete-file', id, rel),
+    setFileReadable: (id, rel, readable) => ipcRenderer.invoke('skills:set-file-readable', id, rel, readable),
     categories: () => ipcRenderer.invoke('skills:categories'),
     addCategory: (name) => ipcRenderer.invoke('skills:add-category', name),
     setCategory: (id, name) => ipcRenderer.invoke('skills:set-category', id, name),

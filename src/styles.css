@@ -202,6 +202,22 @@ code { font-family: var(--mono); }
 }
 .session-items { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
 
+.session-new-btn {
+  margin: 0 12px 10px;
+  padding: 8px 12px;
+  width: calc(100% - 24px);
+  border: 1px solid var(--violet, #7c5cff);
+  border-radius: 8px;
+  background: var(--violet-bg, rgba(124, 92, 255, 0.14));
+  color: var(--violet, #a78bfa);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+.session-new-btn:hover { background: var(--violet-bg, rgba(124, 92, 255, 0.26)); }
+.session-new-btn:active { transform: translateY(1px); }
+
 .session-empty {
   padding: 22px 14px;
   text-align: center;
@@ -385,6 +401,7 @@ code { font-family: var(--mono); }
 }
 
 .topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .topbar-title {
   font-size: 13.5px;
   font-weight: 600;
@@ -2714,6 +2731,9 @@ code { font-family: var(--mono); }
   text-overflow: ellipsis; min-width: 0; font-family: var(--font-mono, Consolas, monospace);
 }
 .mem-tree-ro { font-size: 10px; color: var(--warning); flex-shrink: 0; }
+.mem-tree-ro.off { color: var(--danger, #ff6b6b); }
+.ctx-state { font-size: 10px; color: var(--success, #5fd6a4); margin-left: 6px; flex-shrink: 0; }
+.ctx-state.off { color: var(--danger, #ff6b6b); }
 .mem-tree-del {
   background: none; border: none; cursor: pointer; font-size: 12px;
   padding: 4px 6px; border-radius: 6px; color: var(--text-2);

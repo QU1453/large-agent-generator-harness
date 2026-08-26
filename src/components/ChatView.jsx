@@ -193,9 +193,12 @@ export default function ChatView({
             <button className="ws-tag link" onClick={onOpenWorkspace}>＋ 打开工作区</button>
           )}
         </div>
-        {isStreaming && (
-          <button className="btn stop" onClick={onStop}>⏹ 停止</button>
-        )}
+        <div className="topbar-right">
+          <button className="btn ghost" onClick={() => onCreateSession('agent', agents[0]?.id)} title="新建对话（默认选第一个智能体）">＋ 新对话</button>
+          {isStreaming && (
+            <button className="btn stop" onClick={onStop}>⏹ 停止</button>
+          )}
+        </div>
       </div>
 
       <div className="chat-scroll" ref={scrollRef}>

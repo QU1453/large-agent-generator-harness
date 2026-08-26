@@ -174,10 +174,31 @@ function scanPyDir(dir) {
   return list
 }
 
+// 记忆架构内的技能：<userData>/memory/<架构名>/*.skill.py
+// 放在记忆卡片里的技能由记忆架构承载，技能面板同样显示，dir 指向记忆目录
+function scanMemSkills() {
+  const list = []
+  const memRoot = path.join(path.dirname(userDir), 'memory')
+  if (!fs.existsSync(memRoot)) return list
+  for (const arch of fs.readdirSync(memRoot)) {
+    const archDir = path.join(memRoot, arch)
+    let st
+    try { st = fs.statSync(archDir) } catch { continue }
+    if (!st.isDirectory()) continue
+    for (const f of fs.readdirSync(archDir)) {
+      if (!f.endsWith('.skill.py')) continue
+      const file = path.join(archDir, f)
+      const id = f.replace(/\.skill\.py$/, '')
+      list.push({ id, file, dir: archDir, name: f, memory: arch })
+    }
+  }
+  return list
+}
+
 async function loadPySkills() {
   pySkills = []
   pyLoadError = null
-  const pyFiles = scanPyDir(userDir)
+  const pyFiles = [...scanPyDir(userDir), ...scanMemSkills()]
   if (!pyFiles.length) return
   if (pyEngine) { pyEngine.stop(); pyEngine = null }
   pyEngine = new PythonEngine(pyFiles.map((f) => f.file))
@@ -200,7 +221,8 @@ async function loadPySkills() {
         systemPromptFn: meta.SYSTEM_PROMPT_FN || 'system_prompt', // 动态函数名
         file: m.file,
         dir: src.dir || path.dirname(m.file),
-        source: 'user',
+        source: src.memory ? 'memory' : 'user', // 来自记忆卡片（data/memory/<架构>）
+        memory: src.memory || null,
         kind: 'py',
         _module: m.module || m.id // 引擎内模块键（文件名）
       }
@@ -298,6 +320,7 @@ function resolveInSkill(id, rel) {
 }
 
 const MAIN_NAMES = ['main.skill.js', 'main.skill.py']
+const PERMS_FILE = '.skill-file-perms.json'
 
 function kindOfFile(rel) {
   const e = String(rel).split('.').pop().toLowerCase()
@@ -307,10 +330,28 @@ function kindOfFile(rel) {
   return 'md'
 }
 
+// 技能目录内文件可读性记录（.skill-file-perms.json）：{ rel: { readable: false } }
+function loadFilePerms(id) {
+  const d = getSkillDir(id)
+  if (!d) return {}
+  try {
+    const p = path.join(d, PERMS_FILE)
+    if (!fs.existsSync(p)) return {}
+    return JSON.parse(fs.readFileSync(p, 'utf8')) || {}
+  } catch { return {} }
+}
+
+function saveFilePerms(id, perms) {
+  const d = getSkillDir(id)
+  if (!d) return
+  fs.writeFileSync(path.join(d, PERMS_FILE), JSON.stringify(perms, null, 2), 'utf8')
+}
+
 // 技能目录文件树（主文件不可删，其余自由增删）
 function listFiles(id) {
   const d = getSkillDir(id)
   if (!d || !fs.existsSync(d)) return []
+  const perms = loadFilePerms(id)
   const out = []
   const walk = (cur, rel) => {
     let entries = []
@@ -318,14 +359,27 @@ function listFiles(id) {
     for (const f of entries.sort()) {
       const p = path.join(cur, f)
       const r = rel ? `${rel}/${f}` : f
+      if (f === PERMS_FILE) continue
       let isDir = false
       try { isDir = fs.statSync(p).isDirectory() } catch { continue }
       if (isDir) { walk(p, r); continue }
-      out.push({ rel: r, kind: kindOfFile(r), main: MAIN_NAMES.includes(f), protected: MAIN_NAMES.includes(f) })
+      out.push({ rel: r, kind: kindOfFile(r), main: MAIN_NAMES.includes(f), protected: MAIN_NAMES.includes(f), readable: perms[r] ? !!perms[r].readable : true })
     }
   }
   walk(d, '')
   return out
+}
+
+// 切换文件可读性：readable=false 时该文件对 LLM 不可读（仅在技能目录内记录，不影响文件本身）
+function setFileReadable(id, rel, readable) {
+  const p = resolveInSkill(id, rel)
+  if (!p) throw new Error('路径越界')
+  if (!fs.existsSync(p)) throw new Error(`文件不存在: ${rel}`)
+  const perms = loadFilePerms(id)
+  if (readable) delete perms[rel]
+  else perms[rel] = { readable: false }
+  saveFilePerms(id, perms)
+  return { rel, readable: !!readable }
 }
 
 function readFile(id, rel) {
@@ -371,5 +425,5 @@ function deleteFile(id, rel) {
 module.exports = {
   init, reload, list, get, resolveSystemPrompt, getSourceFile, getPyLoadError: () => pyLoadError,
   addCategory, setCategory, setMcpCategory, removeCategory, listCategories,
-  getSkillDir, listFiles, readFile, writeFile, createFile, deleteFile
+  getSkillDir, listFiles, readFile, writeFile, createFile, deleteFile, setFileReadable
 }

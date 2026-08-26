@@ -50,6 +50,25 @@ const activeWorkflowRuns = new Map() // runId -> AbortController
 
 const isDev = !app.isPackaged
 
+// 运行 Python 文件（技能/记忆/协议通用）：嵌入式或系统 Python，15s 超时，回显 stdout/stderr
+// （模块级定义：registerIpc 与 MCP server 都要用）
+const runPythonFile = (file) => {
+  const { checkPython } = require('./python-engine')
+  const py = checkPython()
+  if (!py.available) throw new Error('未检测到 Python，无法运行（请安装 Python 或运行嵌入式运行时安装脚本）')
+  const { execFile } = require('child_process')
+  return new Promise((resolve) => {
+    execFile(py.bin, [file], { timeout: 15000, windowsHide: true }, (err, stdout, stderr) => {
+      resolve({
+        ok: !err,
+        exitCode: err ? (err.code || 1) : 0,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || '')
+      })
+    })
+  })
+}
+
 function builtinSkillsDir() {
   return isDev
     ? path.join(__dirname, 'skills')
@@ -852,6 +871,7 @@ module.exports = {
   })
   ipcMain.handle('skills:create-file', (_e, id, rel, content) => skills.createFile(id, rel, content))
   ipcMain.handle('skills:delete-file', (_e, id, rel) => skills.deleteFile(id, rel))
+  ipcMain.handle('skills:set-file-readable', (_e, id, rel, readable) => skills.setFileReadable(id, rel, !!readable))
 
   ipcMain.handle('sessions:list', () => chat.getSessionStore().list())
   ipcMain.handle('sessions:create', (_e, opts) => chat.getSessionStore().create(opts))
@@ -1043,23 +1063,6 @@ module.exports = {
   ipcMain.handle('protocols:set-category', (_e, protoName, name) => protocols.setCategory(protoName, name))
   ipcMain.handle('protocols:remove-category', (_e, name) => protocols.removeCategory(name))
   // 协议「运行」：用 Python 执行 .protocol.py，验证语法并回传解析出的配置（调试用）
-  // 运行 Python 文件（技能/记忆/协议通用）：嵌入式或系统 Python，15s 超时，回显 stdout/stderr
-  const runPythonFile = (file) => {
-    const { checkPython } = require('./python-engine')
-    const py = checkPython()
-    if (!py.available) throw new Error('未检测到 Python，无法运行（请安装 Python 或运行嵌入式运行时安装脚本）')
-    const { execFile } = require('child_process')
-    return new Promise((resolve) => {
-      execFile(py.bin, [file], { timeout: 15000, windowsHide: true }, (err, stdout, stderr) => {
-        resolve({
-          ok: !err,
-          exitCode: err ? (err.code || 1) : 0,
-          stdout: String(stdout || ''),
-          stderr: String(stderr || '')
-        })
-      })
-    })
-  }
   ipcMain.handle('protocols:run', (_e, name) => {
     const p = protocols.get(name)
     if (!p || !p.file) throw new Error('协议文件不存在')
@@ -1182,7 +1185,7 @@ async function restartApi() {
     return { running: false }
   }
   try {
-    return await apiServer.start({ getSettings: () => settings, team, agentStore, userDataDir: app.getPath('userData') })
+    return await apiServer.start({ getSettings: () => settings, team, agentStore, userDataDir: app.getPath('userData'), agent, mcp, memory, runPythonFile, auditDir: path.join(DATA_DIR, 'audit') })
   } catch (e) {
     console.warn('[api]', e.message)
     return { running: false, error: e.message }

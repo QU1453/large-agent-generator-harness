@@ -9,6 +9,7 @@ const path = require('path')
 const chat = require('./chat')
 const skills = require('./skills')
 const workspace = require('./workspace')
+const mcpServer = require('./mcp-server')
 
 let server = null
 let settingsGetter = null
@@ -275,6 +276,10 @@ async function handle(req, res) {
 
     if (!authed(req, res)) return
 
+    // MCP Server（SSE 传输）：供 Trae / Claude 等外部 AI 调用
+    if (p === '/mcp/sse' && m === 'GET') return mcpServer.onSse(req, res)
+    if (p === '/mcp/messages' && m === 'POST') return mcpServer.onMessage(req, res, url)
+
     if (p === '/api/health' && m === 'GET') {
       return json(res, 200, { ok: true, app: 'LAG harness', workspace: workspace.getRoot() })
     }
@@ -310,11 +315,12 @@ async function handle(req, res) {
   }
 }
 
-function start({ getSettings, team: teamMod, agentStore: agStore, userDataDir: udd }) {
+function start({ getSettings, team: teamMod, agentStore: agStore, userDataDir: udd, agent, mcp, memory, runPythonFile, auditDir }) {
   settingsGetter = getSettings
   team = teamMod || null
   agentStore = agStore || null
   userDataDir = udd || null
+  mcpServer.init({ getSettings, agentStore, agent, skills, mcp, memory, runPythonFile, auditDir })
   if (server) stop()
   const port = Number(settingsGetter().apiPort) || 37800
   // 团队模式（WiFi 团队开发）监听 0.0.0.0 供局域网访问；否则仅本机

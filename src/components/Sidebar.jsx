@@ -192,12 +192,16 @@ export default function Sidebar({
         <div className="session-list">
           <div className="session-list-header">
             <span>会话历史</span>
-            <button className="mini-btn" title="新建会话" onClick={onCreateSession}>{Icons.plus}</button>
           </div>
+          <button
+            className="session-new-btn"
+            onClick={() => onCreateSession('agent', agents[0]?.id || undefined)}
+            title="新建会话（默认选第一个智能体，可随时切换）"
+          >＋ 新建会话</button>
           <div className="session-items">
             {sessions.length === 0 && (
               <div className="session-empty">
-                暂无会话<br />点击 ＋ 新建一个
+                暂无会话<br />点击上方 ＋ 新建一个
               </div>
             )}
             {sessions.map((s) => (
