@@ -862,6 +862,7 @@ module.exports = {
   ipcMain.handle('extmcps:update', (_e, id, patch) => externalMcps.update(id, patch || {}))
   ipcMain.handle('extmcps:delete', (_e, id) => externalMcps.remove(id))
   ipcMain.handle('extmcps:reload', () => externalMcps.reload())
+  ipcMain.handle('extmcps:set-category', (_e, id, category) => externalMcps.setCategory(id, category))
   ipcMain.handle('skills:create', async (_e, type) => {
     const fs = require('fs')
     const userDir = path.join(app.getPath('userData'), 'skills')
@@ -1081,6 +1082,15 @@ module.exports = {
   ipcMain.handle('agdefs:add-category', (_e, name) => defStore.addCategory(name))
   ipcMain.handle('agdefs:set-category', (_e, id, name) => defStore.setCategory(id, name))
   ipcMain.handle('agdefs:remove-category', (_e, name) => defStore.removeCategory(name))
+  // 智能体文件工作台：agent.json 主定义 + 自由辅助文件（多文件编辑，与技能/记忆一致）
+  ipcMain.handle('agdefs:files', (_e, id) => defStore.listFiles(id))
+  ipcMain.handle('agdefs:read-file', (_e, id, rel) => {
+    return { content: defStore.readFile(id, rel), file: rel, kind: 'agdef' }
+  })
+  ipcMain.handle('agdefs:write-file', (_e, id, rel, content) => defStore.writeFile(id, rel, content))
+  ipcMain.handle('agdefs:create-file', (_e, id, rel, content) => defStore.createFile(id, rel, content))
+  ipcMain.handle('agdefs:delete-file', (_e, id, rel) => defStore.deleteFile(id, rel))
+  ipcMain.handle('agdefs:rename-file', (_e, id, oldRel, newRel) => defStore.renameFile(id, oldRel, newRel))
   ipcMain.handle('agent:run', (_e, id, inputs) => {
     const ag = agentStore.get(id)
     if (!ag) throw new Error('智能体不存在')
@@ -1288,7 +1298,7 @@ async function restartApi() {
     return { running: false }
   }
   try {
-    return await apiServer.start({ getSettings: () => settings, team, agentStore, userDataDir: app.getPath('userData'), agent, toolPacks, memory, runPythonFile, auditDir: path.join(DATA_DIR, 'audit') })
+    return await apiServer.start({ getSettings: () => settings, team, agentStore, userDataDir: app.getPath('userData'), agent, defStore, toolPacks, memory, runPythonFile, auditDir: path.join(DATA_DIR, 'audit') })
   } catch (e) {
     console.warn('[api]', e.message)
     return { running: false, error: e.message }

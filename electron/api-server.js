@@ -315,12 +315,12 @@ async function handle(req, res) {
   }
 }
 
-function start({ getSettings, team: teamMod, agentStore: agStore, userDataDir: udd, agent, mcp, memory, runPythonFile, auditDir }) {
+function start({ getSettings, team: teamMod, agentStore: agStore, userDataDir: udd, agent, defStore, toolPacks, memory, runPythonFile, auditDir }) {
   settingsGetter = getSettings
   team = teamMod || null
   agentStore = agStore || null
   userDataDir = udd || null
-  mcpServer.init({ getSettings, agentStore, agent, skills, mcp, memory, runPythonFile, auditDir })
+  mcpServer.init({ getSettings, agentStore, agent, defStore, skills, toolPacks, memory, runPythonFile, auditDir, userDataDir })
   if (server) stop()
   const port = Number(settingsGetter().apiPort) || 37800
   // 团队模式（WiFi 团队开发）监听 0.0.0.0 供局域网访问；否则仅本机

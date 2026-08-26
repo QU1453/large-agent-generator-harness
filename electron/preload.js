@@ -65,7 +65,8 @@ contextBridge.exposeInMainWorld('harness', {
     add: (input) => ipcRenderer.invoke('extmcps:add', input),
     update: (id, patch) => ipcRenderer.invoke('extmcps:update', id, patch),
     delete: (id) => ipcRenderer.invoke('extmcps:delete', id),
-    reload: () => ipcRenderer.invoke('extmcps:reload')
+    reload: () => ipcRenderer.invoke('extmcps:reload'),
+    setCategory: (id, category) => ipcRenderer.invoke('extmcps:set-category', id, category)
   },
   sessions: {
     list: () => ipcRenderer.invoke('sessions:list'),
@@ -133,7 +134,13 @@ contextBridge.exposeInMainWorld('harness', {
     categories: () => ipcRenderer.invoke('agdefs:categories'),
     addCategory: (name) => ipcRenderer.invoke('agdefs:add-category', name),
     setCategory: (id, name) => ipcRenderer.invoke('agdefs:set-category', id, name),
-    removeCategory: (name) => ipcRenderer.invoke('agdefs:remove-category', name)
+    removeCategory: (name) => ipcRenderer.invoke('agdefs:remove-category', name),
+    files: (id) => ipcRenderer.invoke('agdefs:files', id),
+    readFile: (id, rel) => ipcRenderer.invoke('agdefs:read-file', id, rel),
+    writeFile: (id, rel, content) => ipcRenderer.invoke('agdefs:write-file', id, rel, content),
+    createFile: (id, rel, content) => ipcRenderer.invoke('agdefs:create-file', id, rel, content),
+    deleteFile: (id, rel) => ipcRenderer.invoke('agdefs:delete-file', id, rel),
+    renameFile: (id, oldRel, newRel) => ipcRenderer.invoke('agdefs:rename-file', id, oldRel, newRel)
   },
   exporter: {
     run: (opts) => ipcRenderer.invoke('exporter:run', opts),

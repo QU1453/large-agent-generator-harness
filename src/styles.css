@@ -2951,8 +2951,12 @@ code { font-family: var(--mono); }
 .mem-canvas-editor { flex: 1 1 auto; min-height: 300px; }
 .mem-canvas-editor .code-input { min-height: 300px; }
 
-.mem-wb-editor { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1 1 auto; }
-.mem-wb-editor-wrap { flex: 1 1 auto; min-height: 0; position: relative; }
+.mem-wb-editor { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1 1 auto; background: var(--bg-0); }
+.mem-wb-editor-wrap { flex: 1 1 auto; min-height: 0; position: relative; overflow: auto; }
+/* 内嵌文件编辑器高亮叠加层（与 CodeEditor 一致：pre 高亮 + 透明 textarea） */
+.mem-wb-editor-wrap .code-editor.native { min-height: 100%; }
+.mem-wb-editor-wrap .code-highlight { margin: 0; }
+.mem-wb-editor-wrap .code-input { caret-color: var(--cyan); }
 .mem-wb-editor-head {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 14px; border-bottom: 1px solid var(--border);

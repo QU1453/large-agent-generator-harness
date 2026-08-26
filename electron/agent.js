@@ -182,12 +182,38 @@ function createAgentStore(userDataDir) {
 
 // ---------------- 智能体定义（data/agent-defs）----------------
 // 「智能体」栏：单智能体 = 模型配置（继承/自定义）+ 提示词 + 技能列表 + 工具列表。
+// 存储改为目录式：data/agent-defs/<id>/agent.json（主定义文件）+ 自由辅助文件（说明文档/代码片段等），
+// 编辑方式与技能/记忆一致：卡片点开 → 文件工作台（左文件树 / 中编辑器 / 右信息）。
 // 工作流（画布）里的子智能体节点可直接引用智能体定义，运行时把定义转成最小图执行。
 function createAgentDefStore(userDataDir) {
   const dir = path.join(userDataDir, 'agent-defs')
   fs.mkdirSync(dir, { recursive: true })
-  const fileOf = (id) => path.join(dir, `${id}.json`)
-  const catsFile = path.join(dir, 'categories.json')
+  const MAIN = 'agent.json'
+  const CATS_FILE = 'categories.json'
+
+  // 迁移旧单文件：data/agent-defs/<id>.json → data/agent-defs/<id>/agent.json
+  const migrateLegacy = () => {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json') || name === CATS_FILE) continue
+      const old = path.join(dir, name)
+      let st
+      try { st = fs.statSync(old) } catch { continue }
+      if (!st.isFile()) continue
+      const id = name.slice(0, -5)
+      const sub = path.join(dir, id)
+      const main = path.join(sub, MAIN)
+      try {
+        fs.mkdirSync(sub, { recursive: true })
+        fs.copyFileSync(old, main)
+        fs.unlinkSync(old)
+      } catch { /* 迁移失败不阻塞 */ }
+    }
+  }
+  migrateLegacy()
+
+  const mainFile = (id) => path.join(dir, String(id || ''), MAIN)
+  const defDir = (id) => path.join(dir, String(id || ''))
+  const catsFile = path.join(dir, CATS_FILE)
   let catList = []
   let catMap = {}
   const loadCats = () => {
@@ -212,9 +238,15 @@ function createAgentDefStore(userDataDir) {
   const list = () => {
     const items = []
     for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith('.json') || name === 'categories.json') continue
+      if (name === CATS_FILE) continue
+      const sub = path.join(dir, name)
+      let st
+      try { st = fs.statSync(sub) } catch { continue }
+      if (!st.isDirectory()) continue
+      const main = path.join(sub, MAIN)
+      if (!fs.existsSync(main)) continue
       try {
-        const a = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))
+        const a = JSON.parse(fs.readFileSync(main, 'utf8'))
         items.push({
           id: a.id,
           name: a.name,
@@ -228,11 +260,27 @@ function createAgentDefStore(userDataDir) {
     }
     return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   }
+  // 智能体目录内文件路径解析（防越界）
+  const resolveIn = (id, rel) => {
+    const d = defDir(id)
+    if (!fs.existsSync(d)) return null
+    const p = path.resolve(d, String(rel || '').replace(/^[/\\]+/, ''))
+    const root = d.endsWith(path.sep) ? d : d + path.sep
+    if (!(p === d || p.startsWith(root))) return null
+    return p
+  }
+  const kindOf = (rel) => {
+    const e = String(rel).split('.').pop().toLowerCase()
+    if (e === 'py') return 'py'
+    if (e === 'js') return 'js'
+    if (e === 'json') return 'json'
+    return 'md'
+  }
   return {
     list,
     get(id) {
       try {
-        const d = JSON.parse(fs.readFileSync(fileOf(id), 'utf8'))
+        const d = JSON.parse(fs.readFileSync(mainFile(id), 'utf8'))
         return d && typeof d === 'object' ? d : null
       } catch { return null }
     },
@@ -249,16 +297,93 @@ function createAgentDefStore(userDataDir) {
         createdAt: now,
         updatedAt: now
       }
-      this.save(def)
+      fs.mkdirSync(defDir(def.id), { recursive: true })
+      fs.writeFileSync(mainFile(def.id), JSON.stringify(def, null, 2), 'utf8')
       return def
     },
     save(def) {
+      if (!def || !def.id) throw new Error('智能体缺少 id')
       def.updatedAt = Date.now()
-      fs.writeFileSync(fileOf(def.id), JSON.stringify(def, null, 2), 'utf8')
+      fs.mkdirSync(defDir(def.id), { recursive: true })
+      fs.writeFileSync(mainFile(def.id), JSON.stringify(def, null, 2), 'utf8')
       return def
     },
     remove(id) {
-      try { fs.unlinkSync(fileOf(id)) } catch { /* 忽略 */ }
+      try { fs.rmSync(defDir(id), { recursive: true, force: true }) } catch { /* 忽略 */ }
+    },
+    // ---- 文件工作台（多文件编辑）：主文件 agent.json 不可改名/删除 ----
+    listFiles(id) {
+      const d = defDir(id)
+      if (!d || !fs.existsSync(d)) return []
+      const out = []
+      const walk = (cur, rel) => {
+        let entries = []
+        try { entries = fs.readdirSync(cur) } catch { return }
+        for (const f of entries.sort()) {
+          const p = path.join(cur, f)
+          const r = rel ? `${rel}/${f}` : f
+          let isDir = false
+          try { isDir = fs.statSync(p).isDirectory() } catch { continue }
+          if (isDir) { walk(p, r); continue }
+          out.push({ rel: r, kind: kindOf(r), main: r === MAIN })
+        }
+      }
+      walk(d, '')
+      return out
+    },
+    readFile(id, rel) {
+      const p = resolveIn(id, rel)
+      if (!p) throw new Error('路径越界')
+      if (!fs.existsSync(p)) throw new Error(`文件不存在: ${rel}`)
+      return fs.readFileSync(p, 'utf8')
+    },
+    writeFile(id, rel, content) {
+      const p = resolveIn(id, rel)
+      if (!p) throw new Error('路径越界')
+      fs.mkdirSync(path.dirname(p), { recursive: true })
+      fs.writeFileSync(p, String(content == null ? '' : content), 'utf8')
+      // 写主文件后刷新 updatedAt
+      if (rel === MAIN) {
+        try {
+          const def = JSON.parse(fs.readFileSync(p, 'utf8'))
+          if (def && def.id) this.save(def)
+        } catch { /* 内容可能是非法 JSON，暂不刷新 */ }
+      }
+      return { rel }
+    },
+    createFile(id, rel, content) {
+      const p = resolveIn(id, rel)
+      if (!p) throw new Error('路径越界')
+      if (fs.existsSync(p)) throw new Error(`文件已存在: ${rel}`)
+      fs.mkdirSync(path.dirname(p), { recursive: true })
+      fs.writeFileSync(p, String(content == null ? '' : content), 'utf8')
+      return { rel }
+    },
+    deleteFile(id, rel) {
+      if (rel === MAIN) throw new Error('主定义文件 agent.json 不可删除')
+      const p = resolveIn(id, rel)
+      if (!p) throw new Error('路径越界')
+      if (!fs.existsSync(p)) throw new Error(`文件不存在: ${rel}`)
+      fs.rmSync(p, { force: true })
+      return { ok: true }
+    },
+    renameFile(id, oldRel, newRel) {
+      if (oldRel === MAIN) throw new Error('主定义文件 agent.json 不可重命名')
+      const src = resolveIn(id, oldRel)
+      if (!src) throw new Error('路径越界')
+      if (!fs.existsSync(src)) throw new Error(`文件不存在: ${oldRel}`)
+      if (fs.statSync(src).isDirectory()) throw new Error('不能重命名目录')
+      let nr = String(newRel || '').trim().replace(/\\/g, '/')
+      if (!nr) throw new Error('新文件名不能为空')
+      const base = nr.split('/').pop()
+      if (!/\.\w+$/.test(base)) nr = `${nr}.md`
+      if (nr === String(oldRel).replace(/\\/g, '/')) return { rel: nr, ok: true }
+      const dest = resolveIn(id, nr)
+      if (!dest) throw new Error('路径越界')
+      if (fs.existsSync(dest)) throw new Error(`目标已存在: ${nr}`)
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.renameSync(src, dest)
+      return { rel: nr, ok: true }
     },
     listCategories: catResult,
     addCategory(name) {

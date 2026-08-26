@@ -1,6 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import hljs from 'highlight.js'
 import { h, fmtTime } from '../lib/harness.js'
 import CategoryModal from './CategoryModal.jsx'
+
+// 按扩展名推断高亮语言（与 CodeEditor / WorkspacePanel 一致）
+function langOf(p) {
+  const e = String(p || '').toLowerCase().split('.').pop() || ''
+  const map = {
+    py: 'python', js: 'javascript', mjs: 'javascript', jsx: 'javascript', cjs: 'javascript',
+    ts: 'typescript', tsx: 'typescript', json: 'json', md: 'markdown',
+    c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp',
+    html: 'xml', htm: 'xml', css: 'css', sh: 'bash', bat: 'dos', ps1: 'powershell',
+    yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', sql: 'sql', go: 'go', rs: 'rust', java: 'java'
+  }
+  return map[e] || 'plaintext'
+}
 
 // 记忆管理：记忆架构 = 一个「记忆空间」目录（md 文件优先，人可读可改，不做黑盒、不做画板）
 // 列表页（架构卡片）→ 打开工作台：左文件树 / 中编辑器（Ctrl+S 保存）/ 右信息面板
@@ -306,6 +320,17 @@ function MemoryWorkbench({ name, meta, onBack, onToast }) {
     }
   }
 
+  // 语法高亮：按当前文件扩展名推断语言，渲染为 hljs span（与 textarea 透明文字叠加）
+  const lang = langOf(activeRel)
+  const highlighted = useMemo(() => {
+    const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    try {
+      return hljs.highlight(draft, { language: lang }).value
+    } catch {
+      return escapeHtml(draft)
+    }
+  }, [draft, lang])
+
   const loadFiles = useCallback(async () => {
     const fs_ = await h.memory.files(name)
     setFiles(fs_ || [])
@@ -574,15 +599,22 @@ function MemoryWorkbench({ name, meta, onBack, onToast }) {
           </div>
           <div className="mem-wb-editor-wrap">
             {activeRel ? (
-              <textarea
-                className="mem-file-editor"
-                value={draft}
-                readOnly={readOnly}
-                spellCheck={false}
-                autoCapitalize="off" autoComplete="off" autoCorrect="off"
-                placeholder="文件内容…（Ctrl+S 保存）"
-                onChange={(e) => { setDraft(e.target.value); setDirty(true) }}
-              />
+              <div className="code-editor native mem-code-editor">
+                <pre
+                  className="code-highlight"
+                  aria-hidden="true"
+                  dangerouslySetInnerHTML={{ __html: highlighted + '\n' }}
+                />
+                <textarea
+                  className="code-input"
+                  value={draft}
+                  readOnly={readOnly}
+                  spellCheck={false}
+                  autoCapitalize="off" autoComplete="off" autoCorrect="off"
+                  placeholder="文件内容…（Ctrl+S 保存）"
+                  onChange={(e) => { setDraft(e.target.value); setDirty(true) }}
+                />
+              </div>
             ) : (
               <div className="mem-wb-empty">选择左侧文件开始编辑，或点「＋ 文件」新建</div>
             )}

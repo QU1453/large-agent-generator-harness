@@ -10,7 +10,7 @@ const crypto = require('crypto')
 const path = require('path')
 const fs = require('fs')
 
-let deps = null // { getSettings, agentStore, agent, skills, toolPacks, memory, runPythonFile }
+let deps = null // { getSettings, agentStore, agent, defStore, skills, toolPacks, memory, runPythonFile, auditDir, userDataDir }
 const sessions = new Map() // sessionId -> SSE response（保持的连接）
 
 const SERVER_INFO = { name: 'LAG harness MCP', version: '0.1.0' }
@@ -69,7 +69,48 @@ const MCP_TOOLS = [
       content: { type: 'string', description: '要追加的内容' }
     },
     ['arch', 'content']
-  )
+  ),
+  // ---- 管理类工具（创建分类/技能/智能体/工作流，供外部 AI 编排资产） ----
+  tool('create_category', '在某栏位创建分类文件夹。scope: skills(技能)/agents(智能体)/tools(工具包)/workflows(工作流)。创建后资产可归入该分类。',
+    {
+      scope: { type: 'string', description: '栏位：skills / agents / tools / workflows' },
+      name: { type: 'string', description: '分类文件夹名' }
+    },
+    ['scope', 'name']
+  ),
+  tool('create_skill', '创建一个技能（技能目录 + main.skill.py 主文件 + README）。返回技能 id。',
+    {
+      id: { type: 'string', description: '技能 id（字母数字下划线，如 current_loop）' },
+      name: { type: 'string', description: '技能显示名' },
+      description: { type: 'string', description: '技能用途描述（带 when to use）' },
+      systemPrompt: { type: 'string', description: '可选，系统提示词（默认按描述生成）' },
+      category: { type: 'string', description: '可选，归入技能分类文件夹（自动创建）' }
+    },
+    ['id', 'name', 'description']
+  ),
+  tool('create_agent', '创建一个智能体定义（「智能体」栏：模型继承/自定义 + 提示词 + 技能列表）。返回智能体 id。',
+    {
+      id: { type: 'string', description: '智能体 id（字母数字下划线，如 current_agent）' },
+      name: { type: 'string', description: '智能体显示名' },
+      description: { type: 'string', description: '用途说明' },
+      systemPrompt: { type: 'string', description: '可选，系统提示词' },
+      skills: { type: 'array', description: '可选，绑定技能 id 列表' },
+      category: { type: 'string', description: '可选，归入智能体分类文件夹' }
+    },
+    ['id', 'name']
+  ),
+  tool('save_workflow', '保存一个画布工作流（多智能体编排：节点 + 连线）。nodes 为节点数组（type: input/output/skill/subagent/tool/memory/bus/flow），edges 为连线数组（type: data/message/broadcast/callback，from/to 节点 id）。返回工作流 id。',
+    {
+      id: { type: 'string', description: '工作流 id（字母数字下划线）' },
+      name: { type: 'string', description: '工作流显示名' },
+      nodes: { type: 'array', description: '节点数组' },
+      edges: { type: 'array', description: '连线数组' },
+      category: { type: 'string', description: '可选，归入工作流分类文件夹' }
+    },
+    ['id', 'name', 'nodes', 'edges']
+  ),
+  tool('list_workflows', '列出所有画布工作流：id、名称、节点数。', {}),
+  tool('list_agent_defs', '列出「智能体」栏的智能体定义：id、名称、技能数。', {})
 ]
 
 // ---------------- 工具执行 ----------------
@@ -156,6 +197,136 @@ async function execTool(name, args) {
       const cur = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : ''
       fs.writeFileSync(p, (cur ? cur.replace(/\s*$/, '') + '\n' : '') + String(args.content || '') + '\n', 'utf8')
       return `已写入 ${arch}/${scope}`
+    }
+    // ---- 管理类工具 ----
+    case 'create_category': {
+      const scope = String(args.scope || '').toLowerCase()
+      const name = String(args.name || '').trim()
+      if (!name) throw new Error('分类名不能为空')
+      if (scope === 'skills' || scope === 'tools') {
+        deps.skills.addCategory(name)
+        return `技能/工具分类「${name}」已创建`
+      }
+      if (scope === 'agents') {
+        deps.defStore.addCategory(name)
+        return `智能体分类「${name}」已创建`
+      }
+      if (scope === 'workflows') {
+        deps.agentStore.addCategory(name)
+        return `工作流分类「${name}」已创建`
+      }
+      throw new Error('scope 无效（skills/agents/tools/workflows）')
+    }
+    case 'create_skill': {
+      const id = String(args.id || '').trim().replace(/[^A-Za-z0-9_-]/g, '_')
+      const name = String(args.name || '').trim()
+      const description = String(args.description || '').trim()
+      if (!id) throw new Error('技能 id 不能为空')
+      if (!name) throw new Error('技能名称不能为空')
+      // 复用界面创建逻辑：写 data/skills/<id>/main.skill.py + README.md
+      const userDir = path.join(deps.userDataDir, 'skills')
+      const dir = path.join(userDir, id)
+      if (fs.existsSync(dir)) throw new Error('技能已存在: ' + id)
+      fs.mkdirSync(dir, { recursive: true })
+      const systemPrompt = String(args.systemPrompt || '').trim() ||
+        `你是「${name}」。${description}\n\n遵循以下规则执行任务。`
+      const py = `# ============================================================
+# skill：${name}
+# ${description}
+# ============================================================
+SKILL_ID = "${id}"
+SKILL_NAME = "${name}"
+SKILL_DESC = "${description}"
+SKILL_AVATAR = "⚙️"
+SKILL_MODEL = None
+SKILL_TEMPERATURE = 0.7
+SKILL_MAX_TOKENS = 4096
+
+SKILL_TOOLS = ['list_dir', 'read_file', 'write_file']
+
+def system_prompt(ctx):
+    return """${systemPrompt.replace(/"/g, '\\"').replace(/`/g, '\\`')}"""
+`
+      fs.writeFileSync(path.join(dir, `main.skill.py`), py, 'utf8')
+      fs.writeFileSync(path.join(dir, 'README.md'), `# ${name}\n\n${description}\n`, 'utf8')
+      await deps.skills.reload()
+      const cat = String(args.category || '').trim()
+      if (cat) { deps.skills.addCategory(cat); deps.skills.setCategory(id, cat) }
+      return `技能「${name}」已创建 id=${id}`
+    }
+    case 'create_agent': {
+      const id = String(args.id || '').trim().replace(/[^A-Za-z0-9_-]/g, '_')
+      const name = String(args.name || '').trim()
+      if (!id) throw new Error('智能体 id 不能为空')
+      if (!name) throw new Error('智能体名称不能为空')
+      if (deps.defStore.get(id)) throw new Error('智能体已存在: ' + id)
+      const now = Date.now()
+      const def = {
+        id,
+        name,
+        description: String(args.description || '').trim(),
+        model: { inherit: true },
+        systemPrompt: String(args.systemPrompt || '').trim(),
+        skills: Array.isArray(args.skills) ? args.skills.filter(Boolean) : [],
+        tools: [],
+        createdAt: now,
+        updatedAt: now
+      }
+      deps.defStore.save(def)
+      const cat = String(args.category || '').trim()
+      if (cat) { deps.defStore.addCategory(cat); deps.defStore.setCategory(id, cat) }
+      return `智能体「${name}」已创建 id=${id}`
+    }
+    case 'save_workflow': {
+      const id = String(args.id || '').trim().replace(/[^A-Za-z0-9_-]/g, '_')
+      const name = String(args.name || '').trim()
+      if (!id) throw new Error('工作流 id 不能为空')
+      if (!name) throw new Error('工作流名称不能为空')
+      const nodes = Array.isArray(args.nodes) ? args.nodes : []
+      const edges = Array.isArray(args.edges) ? args.edges : []
+      if (!nodes.length) throw new Error('工作流至少需要 1 个节点')
+      // 归一化节点 id（未给则自动生成）
+      const seen = new Set()
+      const norm = nodes.map((n) => {
+        const base = String(n.id || (n.type || 'node') + '_' + Math.random().toString(36).slice(2, 6))
+        let nid = base
+        let i = 2
+        while (seen.has(nid)) { nid = `${base}_${i++}` }
+        seen.add(nid)
+        return { ...n, id: nid }
+      })
+      const idMap = new Map(nodes.map((n, i) => [String(n.id), norm[i].id]))
+      const normEdges = edges.map((e) => ({
+        id: String(e.id || `e_${Math.random().toString(36).slice(2, 8)}`),
+        type: e.type || 'data',
+        from: idMap.get(String(e.from)) || String(e.from),
+        to: idMap.get(String(e.to)) || String(e.to),
+        when: e.when || null
+      }))
+      const now = Date.now()
+      const agent = {
+        id,
+        name,
+        description: String(args.description || '').trim(),
+        createdAt: now,
+        updatedAt: now,
+        nodes: norm,
+        edges: normEdges
+      }
+      deps.agentStore.save(agent)
+      const cat = String(args.category || '').trim()
+      if (cat) { deps.agentStore.addCategory(cat); deps.agentStore.setCategory(id, cat) }
+      return `工作流「${name}」已保存 id=${id}（${norm.length} 节点 / ${normEdges.length} 连线）`
+    }
+    case 'list_workflows': {
+      const list = deps.agentStore ? deps.agentStore.list() : []
+      if (!list.length) return '暂无工作流。'
+      return list.map((a) => `- ${a.name} | id=${a.id} | ${a.nodeCount || (a.nodes || []).length} 节点`).join('\n')
+    }
+    case 'list_agent_defs': {
+      const list = deps.defStore ? deps.defStore.list() : []
+      if (!list.length) return '暂无智能体定义。'
+      return list.map((a) => `- ${a.name} | id=${a.id} | ${a.skillCount || 0} 技能`).join('\n')
     }
     default:
       throw new Error('未知 MCP 工具: ' + name)
@@ -246,8 +417,8 @@ async function onMessage(req, res, url) {
   req.on('error', () => {})
 }
 
-function init({ getSettings, agentStore, agent, skills, toolPacks, memory, runPythonFile, auditDir }) {
-  deps = { getSettings, agentStore, agent, skills, toolPacks, memory, runPythonFile, auditDir }
+function init({ getSettings, agentStore, agent, defStore, skills, toolPacks, memory, runPythonFile, auditDir, userDataDir }) {
+  deps = { getSettings, agentStore, agent, defStore, skills, toolPacks, memory, runPythonFile, auditDir, userDataDir }
 }
 
-module.exports = { init, onSse, onMessage, MCP_TOOLS }
+module.exports = { init, onSse, onMessage, MCP_TOOLS, execTool }

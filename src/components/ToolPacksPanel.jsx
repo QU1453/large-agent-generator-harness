@@ -12,6 +12,7 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
   const [exts, setExts] = useState([]) // 外部 MCP（标准 MCP 协议）列表
   const [extModal, setExtModal] = useState(null) // 外部 MCP 新建/编辑弹窗 {item?, ...draft}
   const [extLoading, setExtLoading] = useState(false)
+  const [extCatModal, setExtCatModal] = useState(null) // 外部 MCP 新建分类 {id}
 
   // 加载外部 MCP 列表
   useEffect(() => {
@@ -81,26 +82,37 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
   }, [])
 
   // 按分类分组 + 文字搜索过滤（工具默认分类来自界面设置，未分类归「未分类」；空分类也显示出来）
+  // 外部 MCP（标准 MCP 协议）也参与分类：按 category 归类，默认「外部 MCP」分组
   const kw = q.trim().toLowerCase()
   const groups = useMemo(() => {
-    const filtered = toolPacks.filter((m) => !kw ||
-      `${m.name} ${m.id} ${m.description || ''} ${m.tools.map((t) => t.name).join(' ')} ${m.tools.map((t) => t.description || '').join(' ')}`.toLowerCase().includes(kw))
     const map = new Map()
-    for (const m of filtered) {
-      const cat = (cats.toolPackMap && cats.toolPackMap[m.id]) || (cats.mcpMap && cats.mcpMap[m.id]) || '未分类'
+    const put = (cat, item) => {
       if (!map.has(cat)) map.set(cat, [])
-      map.get(cat).push(m)
+      map.get(cat).push(item)
+    }
+    const match = (...parts) => !kw || parts.join(' ').toLowerCase().includes(kw)
+    for (const m of toolPacks) {
+      if (!match(m.name, m.id, m.description || '', m.tools.map((t) => t.name).join(' '), m.tools.map((t) => t.description || '').join(' '))) continue
+      const cat = (cats.toolPackMap && cats.toolPackMap[m.id]) || (cats.mcpMap && cats.mcpMap[m.id]) || '未分类'
+      put(cat, { kind: 'tool', item: m })
+    }
+    for (const m of exts) {
+      if (!match(m.name, m.command || '', m.url || '', m.tools.map((t) => t.name).join(' '))) continue
+      put(m.category || '外部 MCP', { kind: 'ext', item: m })
     }
     for (const c of cats.list) {
       if (!map.has(c)) map.set(c, [])
     }
     return [...map.entries()].map(([cat, list]) => ({ cat, list }))
-  }, [toolPacks, cats, kw])
+  }, [toolPacks, exts, cats, kw])
 
   const saveNewCategory = async (name) => {
     await h.toolPacks.addCategory(name)
     if (catModal && catModal.targetPackId) {
       await h.toolPacks.setCategory(catModal.targetPackId, name)
+    }
+    if (extCatModal && extCatModal.id) {
+      setExts(await h.extMcps.setCategory(extCatModal.id, name))
     }
     setCats(await h.toolPacks.categories())
     onReload()
@@ -214,12 +226,19 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
           <div className="mcp-empty">暂无工具包，点击上方按钮开始</div>
         </div>
       )}
-      {groups.map(({ cat, list }) => (
+      {groups.map(({ cat, list }) => {
+        const tools = list.filter((x) => x.kind === 'tool')
+        const extsIn = list.filter((x) => x.kind === 'ext')
+        if (!tools.length && !extsIn.length && cat !== '外部 MCP') return null
+        return (
         <div key={cat} className="agent-group">
           <div className="agent-group-title">
-            <span className="agent-group-name">{cat}</span>
+            <span className="agent-group-name">{cat === '外部 MCP' ? '🌐 ' : ''}{cat}</span>
             <span className="agent-group-count">{list.length}</span>
-            {cat !== '未分类' && (
+            {cat === '外部 MCP' && (
+              <button className="mini-btn cat-del" title="重新连接全部外部 MCP" onClick={reloadExts}>{extLoading ? '连接中…' : '🔄'}</button>
+            )}
+            {cat !== '未分类' && cat !== '外部 MCP' && (
               <button
                 className="mini-btn danger cat-del"
                 title="删除该分类文件夹（成员移回未分类）"
@@ -228,7 +247,7 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
             )}
           </div>
           <div className="mcp-grid">
-            {list.map((m) => (
+            {tools.map(({ item: m }) => (
               <div key={m.id} className={`mcp-card${selected.has(m.id) ? ' selected' : ''}`} onClick={() => onEdit(m.id)} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCardMenu({ m, x: e.clientX, y: e.clientY }) }} title="点击编辑源码（右键管理）">
                 <div className="mcp-card-check">
                   <input
@@ -294,20 +313,7 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-      ))}
-
-      {/* 外部 MCP（标准 MCP 协议）：独立分组 */}
-      {exts.length > 0 && (
-        <div className="agent-group">
-          <div className="agent-group-title">
-            <span className="agent-group-name">🌐 外部 MCP</span>
-            <span className="agent-group-count">{exts.length}</span>
-            <button className="mini-btn cat-del" title="重新连接全部外部 MCP" onClick={reloadExts}>{extLoading ? '连接中…' : '🔄'}</button>
-          </div>
-          <div className="mcp-grid">
-            {exts.map((m) => (
+            {extsIn.map(({ item: m }) => (
               <div key={m.id} className={`mcp-card ext${m.enabled ? '' : ' disabled'}`} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCardMenu({ m, x: e.clientX, y: e.clientY, isExt: true }) }} title="右键管理">
                 <div className="mcp-card-check" />
                 <div className="mcp-card-head">
@@ -319,6 +325,29 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
                   <span className={`mcp-count ${m.status === 'connected' ? 'py' : ''}`}>{m.status === 'connected' ? `已连接 ${m.tools.length} 工具` : m.status === 'disabled' ? '已停用' : '连接失败'}</span>
                 </div>
                 <p className="mcp-desc">{m.status === 'connected' ? `标准 MCP 协议 · ${m.tools.map((t) => t.name).join('、')}` : (m.error || (m.enabled ? '未连接' : '已停用'))}</p>
+                <div className="mcp-cat-row">
+                  <select
+                    className="mcp-cat-select"
+                    value={m.category || '外部 MCP'}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={async (e) => {
+                      const v = e.target.value
+                      if (v === '__new__') setExtCatModal({ id: m.id })
+                      else {
+                        try {
+                          setExts(await h.extMcps.setCategory(m.id, v))
+                        } catch (err) {
+                          alert(err.message)
+                        }
+                      }
+                    }}
+                  >
+                    {['外部 MCP', ...cats.list.filter((c) => c !== '外部 MCP')].map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                    <option value="__new__">＋ 新建分类…</option>
+                  </select>
+                </div>
                 <div className="mcp-card-actions">
                   <button className="btn small" onClick={() => openExtModal(m)}>✎ 编辑</button>
                   <button className="btn small danger" onClick={() => deleteExt(m)}>🗑 删除</button>
@@ -326,17 +355,20 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
               </div>
             ))}
           </div>
-          <div className="hint-box">
-            <strong>外部 MCP 说明</strong>
-            <ul>
-              <li>走<strong>标准 MCP 协议</strong>（JSON-RPC + initialize/tools/list/tools/call），与内部工具包（.tool.*）不同，可从外部导入现成 MCP Server</li>
-              <li><strong>stdio</strong>：本地命令启动，如 <code>npx @modelcontextprotocol/server-github</code></li>
-              <li><strong>http</strong>：远程 URL（Streamable HTTP），如 <code>http://127.0.0.1:37800/mcp/sse</code> 或 GitHub MCP 的远程端点</li>
-              <li>外部工具以 <code>ext_</code> 前缀进入 LLM 工具列表，画布工具节点也可直接选择</li>
-            </ul>
-          </div>
+          {cat === '外部 MCP' && (
+            <div className="hint-box">
+              <strong>外部 MCP 说明</strong>
+              <ul>
+                <li>走<strong>标准 MCP 协议</strong>（JSON-RPC + initialize/tools/list/tools/call），与内部工具包（.tool.*）不同，可从外部导入现成 MCP Server</li>
+                <li><strong>stdio</strong>：本地命令启动，如 <code>npx @modelcontextprotocol/server-github</code></li>
+                <li><strong>http</strong>：远程 URL（Streamable HTTP），如 <code>http://127.0.0.1:37800/mcp/sse</code> 或 GitHub MCP 的远程端点</li>
+                <li>外部工具以 <code>ext_</code> 前缀进入 LLM 工具列表，画布工具节点也可直接选择</li>
+              </ul>
+            </div>
+          )}
         </div>
-      )}
+        )
+      })}
 
       {/* 工具卡片右键菜单 */}
       {cardMenu && (
@@ -412,9 +444,9 @@ export default function ToolPacksPanel({ toolPacks, python, onReload, onToast, o
       )}
 
       <CategoryModal
-        open={!!catModal}
+        open={!!catModal || !!extCatModal}
         onCreate={saveNewCategory}
-        onClose={() => setCatModal(null)}
+        onClose={() => { setCatModal(null); setExtCatModal(null) }}
       />
 
       <div className="hint-box">

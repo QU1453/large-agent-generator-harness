@@ -27,7 +27,7 @@ function loadConfig() {
 }
 
 function saveConfig() {
-  const plain = servers.map(({ id, name, type, command, args, url, headers, enabled }) => ({ id, name, type, command, args, url, headers, enabled }))
+  const plain = servers.map(({ id, name, type, command, args, url, headers, enabled, category }) => ({ id, name, type, command, args, url, headers, enabled, category }))
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(plain, null, 2), 'utf8')
 }
@@ -234,7 +234,7 @@ class MCPConnection {
 // ---------------- 对外 API ----------------
 function init() {
   servers = loadConfig().map((c) => {
-    const cfg = { ...c, id: c.id || 'ext_' + crypto.randomUUID().slice(0, 8) }
+    const cfg = { ...c, id: c.id || 'ext_' + crypto.randomUUID().slice(0, 8), category: c.category || '外部 MCP' }
     const conn = new MCPConnection(cfg)
     return { ...cfg, conn, status: 'idle', error: null, tools: [] }
   })
@@ -266,6 +266,7 @@ function list() {
     url: s.url || '',
     headers: s.headers || {},
     enabled: !!s.enabled,
+    category: s.category || '外部 MCP',
     status: s.status || 'idle',
     error: s.error || null,
     tools: s.tools || []
@@ -281,7 +282,8 @@ function add(input) {
     args: Array.isArray(input.args) ? input.args : String(input.args || '').split(/\s+/).filter(Boolean),
     url: String(input.url || '').trim(),
     headers: input.headers || {},
-    enabled: input.enabled !== false
+    enabled: input.enabled !== false,
+    category: String(input.category || '外部 MCP').trim() || '外部 MCP'
   }
   if (cfg.type === 'stdio' && !cfg.command) throw new Error('stdio 类型需要 command')
   if (cfg.type === 'http' && !cfg.url) throw new Error('http 类型需要 URL')
@@ -302,9 +304,19 @@ function update(id, patch) {
   if (patch.url != null) s.url = String(patch.url).trim()
   if (patch.headers != null) s.headers = patch.headers || {}
   if (patch.enabled != null) s.enabled = !!patch.enabled
+  if (patch.category != null) s.category = String(patch.category).trim() || '外部 MCP'
   s.conn = new MCPConnection(s)
   saveConfig()
   reload()
+  return list()
+}
+
+// 设置外部 MCP 的分类文件夹
+function setCategory(id, category) {
+  const s = byId.get(id)
+  if (!s) throw new Error('外部 MCP 不存在')
+  s.category = String(category || '外部 MCP').trim() || '外部 MCP'
+  saveConfig()
   return list()
 }
 
@@ -347,4 +359,4 @@ function stopAll() {
   for (const s of servers) { try { s.conn && s.conn.stop() } catch { /* 忽略 */ } }
 }
 
-module.exports = { init, reload, list, add, update, remove, allTools, execTool, stopAll }
+module.exports = { init, reload, list, add, update, setCategory, remove, allTools, execTool, stopAll }

@@ -220,6 +220,8 @@ URL：http://127.0.0.1:37800/mcp/sse
 | **N1 模型体系** | 画布节点模型配置（继承上游/自定义 URL+API+模型名）+ 侧栏拆分「工作流/智能体」（智能体=单智能体：模型/提示词/技能）+ 导出配置注入接口（/api/config，导出绝不含密钥） | ✅ 已完成 |
 | **N2 工具包命名** | 内部工具包去 MCP 化：`mcp:`→`tool:`、`mcp_`→`tool_`、`.mcp.*`→`.tool.*`、目录 mcps→tool-packs、面板「工具/MCP」→「工具包」；标准 MCP Server（对外）保留原名；读取兼容旧名、启动时一次性迁移旧数据 | ✅ 已完成 |
 | **N3 外部 MCP** | Harness 作为 MCP 客户端接入外部 MCP Server（stdio 本地命令 / http Streamable），工具以 `ext_` 前缀并入 LLM 与画布工具节点；工具包面板「🌐 外部 MCP」管理（增删改/连接状态） | ✅ 已完成 |
+| **N6 外部 MCP 分类** | 外部 MCP 从写死独立分组改为参与分类文件夹体系（按 category 归类，默认「外部 MCP」分组，可建新分类/移动分类） | ✅ 已完成 |
+| **N7 接口创建调参体系** | MCP Server 新增管理类工具（create_category/create_skill/create_agent/save_workflow/list_workflows/list_agent_defs）；通过真实 SSE 接口创建「电流环→速度环→位置环」三技能+三智能体+画布工作流，各栏位建「电机调参」分类文件夹 | ✅ 已完成 |
 | **N4 文件重命名** | 技能文件树 / 记忆文件树右键「✏ 重命名」（主组件/受保护文件不可改名，可读性记录迁移，无扩展名补 .md） | ✅ 已完成 |
 | **N5 语法高亮** | VS Code Dark+ 风格 hljs token 配色（关键字/字符串/注释/数字/函数等分色）；按扩展名推断语言（py/c/cpp/js/ts/json…）；画布逻辑代码弹窗同享高亮 | ✅ 已完成 |
 | **P4-1 工具管道** | 工具执行中间件（pre/post-execute）+ 审计统一落盘 + 工具调用自动入记忆账本 + A2A 工具级访问控制 | ✅ 已完成 |
@@ -473,6 +475,87 @@ P4-1 → P4-2 → P4-3（骨架）→ P4-4 → P4-5 → P4-6 → P4-7。
 3. e2e 验证：技能文件树/记忆文件树重命名；代码编辑高亮配色；外部 MCP（mock stdio server）add→connect→tools/list→execTool→update→delete
 4. 停 LAG harness 进程 → 打包 release（`release\win-unpacked\LAG harness.exe`）→ 启动验证
 5. 更新 GitHub 仓库（含 ignore 保护，不含任何 api key 文件）
+
+---
+
+## 十四、N6/N7 开发文档（工具包外部 MCP 分类 + 接口创建电机调参工作流）
+
+> 状态：**已完成**。两个需求：① 工具包面板里要有「外部 MCP」分类（使用标准 MCP 协议的外部工具）；② 用 harness 对外接口（MCP Server）创建一套完整的电机 PID 调参工作流（电流环/速度环/位置环等，一个智能体负责一环），并在各功能栏位建好文件夹、创建相关工具/技能/智能体（记忆 pid-tuning 已建）。
+
+### 14.1 N6 工具包面板「外部 MCP」分类（小）
+
+**现状**：外部 MCP 在工具包面板底部是写死的独立分组（`🌐 外部 MCP`），不参与分类文件夹体系（`cats.list`），无法归类。
+
+**做法**：
+- `electron/mcp-client.js`：`list()` 返回增加 `category` 字段（默认 `外部 MCP`）；新增 `setCategory(id, name)` 持久化到 `data/external-mcps.json`
+- `electron/main.js`：IPC `extmcps:set-category`
+- `electron/preload.js`：`h.extMcps.setCategory`
+- `src/components/ToolPacksPanel.jsx`：外部 MCP 卡片并入分类分组渲染（按 `category` 归类，未设置归「外部 MCP」分组）；右键菜单加「移动分类」；分类下拉可选 `__new__` 建新分类
+- 落点：`mcp-client.js`、`main.js`、`preload.js`、`ToolPacksPanel.jsx`
+
+### 14.2 N7 用 harness 对外接口创建电机 PID 调参工作流
+
+**现状**：harness 对外 MCP Server（SSE 37800）只暴露**读取/运行类** 9 工具（get_health/list_agents/run_agent/list_skills/run_skill/list_mcp_tools/call_mcp_tool/memory_read/memory_write），**没有任何创建/管理类工具**——外部 AI（或用户）无法通过接口创建智能体/技能/工作流/分类。本次要补上「管理接口」并用它实际创建调参体系。
+
+#### 14.2.1 扩展对外 MCP Server：新增管理类工具（N7a）
+
+在 `electron/mcp-server.js` 的 `MCP_TOOLS` 追加（**协议仍走标准 MCP**，纯 JSON-RPC 无改动）：
+
+| 工具 | 作用 | 参数 |
+|---|---|---|
+| `create_category` | 在某栏位建分类文件夹 | `scope(skills/agents/tools/memory/workflows)` + `name` |
+| `create_skill` | 创建技能（目录+main 文件） | `id`+`name`+`description`+`systemPrompt`(可选)+`category`(可选) |
+| `create_agent` | 创建智能体定义 | `id`+`name`+`description`+`systemPrompt`+`skills[]`+`model{inherit}`+`category` |
+| `save_workflow` | 保存画布工作流（含节点/连线） | `id`+`name`+`nodes[]`+`edges[]`+`category` |
+| `list_workflows` | 列工作流 | — |
+| `toolpacks_list` | 列出内置工具包 | —（已有 list_mcp_tools，保留） |
+
+执行时复用现有 `skills.js` / `agent.createAgentDefStore` / `agent.createAgentStore` 的创建接口（`create` + `save` + `setCategory`），不新增底层存储。
+
+#### 14.2.2 用接口创建「电机 PID 调参」体系（N7b，真实调用验证）
+
+先在 harness 各栏位建好分类文件夹，再逐项创建（**全部通过 MCP 接口调用**，不是直接写文件）：
+
+**① 分类文件夹**
+| 栏位 | 分类 | 说明 |
+|---|---|---|
+| 技能 | `电机调参` | 三个环的调参技能 |
+| 智能体 | `电机调参` | 三个环的调参智能体 |
+| 工具 | `电机PID`（已有 motor_pid/pid_memory 归此） | — |
+| 记忆 | `pid-tuning`（已建） | 记忆卡片 |
+
+**② 技能**（`create_skill`，每个技能一个 when-to-use）：
+| 技能 id | 名称 | 负责 |
+|---|---|---|
+| `current_loop` | 电流环调参 | 电流环 Kp/Ki/Kd 整定（最内环，最先调） |
+| `speed_loop` | 速度环调参 | 速度环整定（内环稳定后调） |
+| `position_loop` | 位置环调参 | 位置环整定（最外环） |
+
+**③ 智能体**（`create_agent`，一个智能体一个环，model 全部 inherit 继承上游）：
+| 智能体 | 技能 | systemPrompt 要点 |
+|---|---|---|
+| 电流环智能体 | current_loop | 角色=电流环调参工程师；when-to-use |
+| 速度环智能体 | speed_loop | 角色=速度环调参工程师；依赖电流环已稳定 |
+| 位置环智能体 | position_loop | 角色=位置环调参工程师；依赖速度环已稳定 |
+
+**④ 工作流**（`save_workflow`）：画布编排「输入 → 电流环智能体 → 速度环智能体 → 位置环智能体 → 输出」，`data` 连线串联（上游输出作为下游输入），子智能体节点引用上述三个智能体定义。
+
+**⑤ 记忆**：已建 `pid-tuning` 卡片（policy/facts/episodes/skills/ledger/bus + pid_tuner.skill.py），本次直接沿用；各智能体在记忆节点/接口中绑定 `pid-tuning`。
+
+#### 14.2.3 验证（N7c）
+
+1. 通过 `create_category/create_skill/create_agent/save_workflow` 依次调用，逐个断言返回成功
+2. `list_agents/list_skills/list_workflows` 确认创建结果；harness 界面「智能体/技能/工作流」栏位出现对应卡片与分类
+3. 运行工作流（无真机时用 motor_sim_driver 仿真）：输入一段调参任务 → 三个智能体依次执行 → 输出收敛的 PID 参数
+4. 打包 release + 启动验证
+
+#### 14.2.4 落点清单
+
+`electron/mcp-server.js`（新增 6 个管理工具）、`electron/mcp-client.js`（N6 分类）、`electron/main.js`（IPC）、`electron/preload.js`、`src/components/ToolPacksPanel.jsx`（N6 前端）。数据资产由接口写入 `data/`。
+
+### 14.3 实施顺序
+
+N6（外部 MCP 分类，小）→ N7a（管理接口，中）→ N7b（接口创建调参体系，验证）→ N7c（工作流运行验证）→ 打包。
 
 ---
 
