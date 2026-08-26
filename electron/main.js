@@ -1197,8 +1197,17 @@ module.exports = {
   })
   ipcMain.handle('memory:files', (_e, name) => memory.listFiles(name))
   ipcMain.handle('memory:read-file', (_e, name, rel) => memory.readFileAny(name, rel))
-  ipcMain.handle('memory:write-file', (_e, name, rel, content) => memory.writeFileAny(name, rel, content))
-  ipcMain.handle('memory:create-file', (_e, name, rel, content) => memory.createFile(name, rel, content))
+  ipcMain.handle('memory:write-file', (_e, name, rel, content) => {
+    const r = memory.writeFileAny(name, rel, content)
+    // 保存 .mem.py 记忆脚本后重载记忆脚本引擎
+    if (String(rel || '').endsWith('.mem.py')) memory.reloadMemScripts()
+    return r
+  })
+  ipcMain.handle('memory:create-file', (_e, name, rel, content) => {
+    const r = memory.createFile(name, rel, content)
+    if (String(rel || '').endsWith('.mem.py')) memory.reloadMemScripts()
+    return r
+  })
   ipcMain.handle('memory:delete-file', (_e, name, rel) => memory.deleteFile(name, rel))
   ipcMain.handle('memory:rename-file', (_e, name, oldRel, newRel) => memory.renameFile(name, oldRel, newRel))
   ipcMain.handle('memory:set-protected', (_e, name, rel, on) => memory.setProtected(name, rel, on))

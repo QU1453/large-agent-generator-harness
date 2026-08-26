@@ -115,6 +115,10 @@ function _dispatch(name, args, ctx) {
     const toolName = name.slice(4)
     return mcpClient.execTool(toolName, args)
   }
+  // 记忆脚本工具分发（mem_*，如 pid 调参三层记忆）：由记忆引擎执行
+  if (name.startsWith('mem_')) {
+    return memory.execMemScriptTool(name, args)
+  }
   // 工具包工具分发（LLM 函数名带 tool_ 前缀；兼容旧名 mcp_）
   if (name.startsWith('tool_') || name.startsWith('mcp_')) {
     const toolName = name.slice(name.indexOf('_') + 1)

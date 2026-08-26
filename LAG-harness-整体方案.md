@@ -538,9 +538,9 @@ P4-1 → P4-2 → P4-3（骨架）→ P4-4 → P4-5 → P4-6 → P4-7。
 | 速度环智能体 | speed_loop | 角色=速度环调参工程师；依赖电流环已稳定 |
 | 位置环智能体 | position_loop | 角色=位置环调参工程师；依赖速度环已稳定 |
 
-**④ 工作流**（`save_workflow`）：画布编排「输入 → 协议 → 电流环智能体 → 协议 → 速度环智能体 → 协议 → 位置环智能体 → 输出」，`data` 连线串联；**显式挂接**：`pid-tuning` 记忆节点（reads policy/facts/episodes/skills）、6 个工具节点（`tool:motor_connect`/`tool:motor_set_pid`/`tool:motor_read_samples`/`tool:mem_route`/`tool:mem_record_lesson`）、外部 MCP 工具节点（`ext:get_health`，标准 MCP 协议）；工具/记忆节点经 data 连线注入各子智能体节点（子智能体分支已支持透传到子图技能节点）。
+**④ 工作流**（`save_workflow`）：画布编排「输入 → 协议 → 电流环智能体 → 协议 → 速度环智能体 → 协议 → 位置环智能体 → 输出」，`data` 连线串联；**显式挂接**：`pid-tuning` 记忆节点（reads policy/facts/episodes/skills）、电机工具节点（`tool:motor_connect`/`tool:motor_set_pid`/`tool:motor_read_samples`）、外部 MCP 工具节点（`ext:get_health`，标准 MCP 协议）；记忆工具（mem_*）不占画布工具节点——由绑定 `pid-tuning` 记忆自动注入各子智能体（子智能体分支已支持透传到子图技能节点）。
 
-**⑤ 记忆**：已建 `pid-tuning` 卡片（policy/facts/episodes/skills/ledger/bus + pid_tuner.skill.py），本次直接沿用；各智能体在记忆节点/接口中绑定 `pid-tuning`。
+**⑤ 记忆**：已建 `pid-tuning` 卡片（policy/facts/episodes/skills/ledger/bus + pid_tuner.skill.py + **pid_memory.mem.py**）。三层记忆工具（mem_*）从工具包迁入记忆体系：记忆脚本 `pid_memory.mem.py` 由记忆引擎加载，绑定 `pid-tuning` 记忆的智能体自动获得 mem_* 工具（archBinding 并入 + LLM schema 合并），**工具包面板不再显示记忆工具**。
 
 #### 14.2.3 验证（N7c）
 

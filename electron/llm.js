@@ -2,6 +2,7 @@
 const { execTool } = require('./tools')
 const toolPacks = require('./tool-packs')
 const externalMcps = require('./mcp-client')
+const memory = require('./memory')
 // 用 Electron 网络栈请求 LLM：自动走系统代理（直连 fetch 在代理环境下会连接超时）
 const { net } = require('electron')
 
@@ -284,7 +285,20 @@ function getToolSchemas(agent) {
         parameters: t.parameters
       }
     }))
-  return [...builtin, ...mcpSchemas, ...extSchemas]
+  // 合并记忆脚本工具（mem_*，如 pid 调参三层记忆）：绑定记忆架构后自动启用
+  const memSchemas = []
+  for (const t of memory.allMemScriptToolDefs()) {
+    if (!allowed.includes(t.name)) continue
+    memSchemas.push({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters
+      }
+    })
+  }
+  return [...builtin, ...mcpSchemas, ...extSchemas, ...memSchemas]
 }
 
 module.exports = { streamChat, TOOL_SCHEMAS, RUN_AGENT_SCHEMA, MEMORY_TOOL_SCHEMAS, getToolSchemas, execTool }

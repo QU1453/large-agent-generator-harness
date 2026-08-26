@@ -347,7 +347,7 @@ function saveFilePerms(id, perms) {
   fs.writeFileSync(path.join(d, PERMS_FILE), JSON.stringify(perms, null, 2), 'utf8')
 }
 
-// 技能目录文件树（主文件不可删，其余自由增删）
+// 技能目录文件树（主文件不可删，其余自由增删；记忆卡片技能的主文件为 <id>.skill.py）
 function listFiles(id) {
   const d = getSkillDir(id)
   if (!d || !fs.existsSync(d)) return []
@@ -362,8 +362,15 @@ function listFiles(id) {
       if (f === PERMS_FILE) continue
       let isDir = false
       try { isDir = fs.statSync(p).isDirectory() } catch { continue }
-      if (isDir) { walk(p, r); continue }
-      out.push({ rel: r, kind: kindOfFile(r), main: MAIN_NAMES.includes(f), protected: MAIN_NAMES.includes(f), readable: perms[r] ? !!perms[r].readable : true })
+      if (isDir) {
+        // 跳过 Python 缓存目录（.pyc 二进制不应出现在文件树）
+        if (f === '__pycache__') continue
+        walk(p, r)
+        continue
+      }
+      // 主文件判定：标准 main.skill.* 或记忆卡片技能的 <id>.skill.*
+      const isMain = MAIN_NAMES.includes(f) || /\.skill\.(js|py)$/.test(f)
+      out.push({ rel: r, kind: kindOfFile(r), main: isMain, protected: isMain, readable: perms[r] ? !!perms[r].readable : true })
     }
   }
   walk(d, '')

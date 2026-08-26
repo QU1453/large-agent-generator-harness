@@ -10,6 +10,7 @@
 // （绑定该架构目录），记忆跨运行保留；导出时随 LA 包整体复制到 memory/<架构名>/。
 const fs = require('fs')
 const path = require('path')
+const { PythonEngine } = require('./python-engine')
 
 let dir = null
 let catsFile = null
@@ -39,6 +40,92 @@ function init(userDataDir) {
   catsFile = path.join(dir, 'categories.json')
   loadCats()
   migrateLegacy()
+  loadMemScripts()
+}
+
+// ---------------- 记忆脚本引擎（.mem.py） ----------------
+// 记忆体系内的程序性记忆脚本：放在记忆架构目录下（如 pid-tuning/pid_memory.mem.py），
+// 由 Python 引擎加载，暴露 mem_* 工具。与工具包（.tool.py）不同：这些工具属于「记忆」，
+// 绑定该记忆架构的智能体自动获得（archBinding 并入），工具包面板不显示。
+let memEngine = null           // PythonEngine 单例
+let memScripts = []            // [{arch, name, file, tools: [{name, description, parameters}]}]
+let memScriptError = null
+let memLoaded = false
+
+function scanMemScriptFiles() {
+  const out = []
+  if (!dir || !fs.existsSync(dir)) return out
+  for (const arch of fs.readdirSync(dir)) {
+    const archDir = path.join(dir, arch)
+    let st
+    try { st = fs.statSync(archDir) } catch { continue }
+    if (!st.isDirectory()) continue
+    for (const f of fs.readdirSync(archDir)) {
+      if (!f.endsWith('.mem.py')) continue
+      out.push({ arch, name: f.replace(/\.mem\.py$/, ''), file: path.join(archDir, f) })
+    }
+  }
+  return out
+}
+
+// 加载全部记忆脚本（记忆架构目录下 *.mem.py），启动 Python 引擎
+function loadMemScripts() {
+  memScripts = []
+  memScriptError = null
+  const files = scanMemScriptFiles()
+  if (!files.length) { if (memEngine) { try { memEngine.stop() } catch {} memEngine = null }; memLoaded = true; return }
+  if (memEngine) { try { memEngine.stop() } catch {} }
+  memEngine = new PythonEngine(files.map((f) => f.file))
+  ;(async () => {
+    try {
+      const modules = await memEngine.listTools()
+      for (const m of modules || []) {
+        const src = files.find((f) => f.file === m.file) || files.find((f) => f.name === (m.id || m.name)) || {}
+        memScripts.push({
+          arch: src.arch || '',
+          name: src.name || m.id || m.name,
+          file: m.file,
+          tools: Array.isArray(m.tools) ? m.tools.map((t) => ({ name: t.name, description: t.description || '', parameters: t.parameters || null })) : []
+        })
+      }
+      memLoaded = true
+    } catch (e) {
+      memScriptError = e.message
+      memLoaded = true
+      console.warn('[memory] 记忆脚本加载失败:', e.message)
+    }
+  })()
+}
+
+// 某记忆架构启用的记忆脚本工具名列表（archBinding 并入绑定工具集）
+function memScriptToolsFor(arch) {
+  return memScripts
+    .filter((s) => s.arch === arch)
+    .flatMap((s) => s.tools.map((t) => t.name))
+}
+
+// 某记忆架构启用的记忆脚本完整工具定义（供 LLM schema 合并）
+function memScriptToolDefsFor(arch) {
+  return memScripts
+    .filter((s) => s.arch === arch)
+    .flatMap((s) => s.tools)
+}
+
+// 全部记忆脚本工具定义（LLM schema 合并时按 allowed 过滤）
+function allMemScriptToolDefs() {
+  return memScripts.flatMap((s) => s.tools)
+}
+
+// 执行记忆脚本工具：由 tools.js 分发（LLM 函数名 mem_xxx）
+async function execMemScriptTool(name, args) {
+  if (!memEngine) throw new Error('记忆脚本引擎不可用')
+  return await memEngine.execTool(name, args || {})
+}
+
+// 重载记忆脚本（记忆工作台保存 .mem.py 后调用）
+function reloadMemScripts() {
+  loadMemScripts()
+  return true
 }
 
 // ---------------- 分类（像智能体/协议一样管理，存 memory/categories.json） ----------------
@@ -546,6 +633,11 @@ function archBinding(name) {
   const policyBody = (m && m.meta && m.meta.desc) || ''
   const parts = []
   parts.push(`你绑定了可长期读写的记忆架构「${name}」${policyBody ? `（策略摘要：${policyBody}）` : ''}。每个架构是一个记忆空间（policy 策略 / facts 事实 / episodes 情景 / skills 技能 / ledger 账本 / bus 通信总线），可用工具：memory_read（读）、memory_write（覆写，默认 facts）、memory_append（追加，默认 episodes）、memory_search（全文检索）、memory_forget（遗忘）。规则：写入自动带 [[txn:日期]] 时间戳并记入账本；先遵循 policy 决定读写时机与遗忘规则；重要结论/约定/用户偏好写 facts，一次性事件写 episodes，修复成功步骤写 skills；记忆跨运行保留。`)
+  // 记忆脚本工具（mem_*，如 pid 调参的三层记忆）：绑定该架构自动获得
+  const memToolNames = memScriptToolsFor(name)
+  if (memToolNames.length) {
+    parts.push(`该架构还带有程序性记忆脚本，可用工具：${memToolNames.join('、')}。按脚本描述使用（如短期会话 mem_get_session / mem_update_session、长期经验 mem_record_lesson / mem_query_lessons、程序性宏 mem_make_recipe / mem_apply_recipe、目录路由 mem_catalog / mem_route）。`)
+  }
   // 链接的 skill：协作提示
   const skNames = Array.isArray(cfg.skills) ? cfg.skills.filter(Boolean) : []
   if (skNames.length) parts.push(`该记忆架构与这些 skill 共享：${skNames.join('、')}。读取记忆时注意它们留下的记录，写入时保持条理。`)
@@ -558,7 +650,7 @@ function archBinding(name) {
     parts.push(`该架构启用了通信总线（bus.md）：多个智能体可在同一文件里分区沟通。格式：[[区域名]]内容[[/区域名]]；读取用 memory_read（scope=bus.md），写入/追加用 memory_write / memory_append（scope=bus.md）。`)
   }
   return {
-    tools: [...new Set(['memory_read', 'memory_write', 'memory_append', 'memory_search', 'memory_forget', ...(Array.isArray(cfg.tools) ? cfg.tools : [])])],
+    tools: [...new Set(['memory_read', 'memory_write', 'memory_append', 'memory_search', 'memory_forget', ...(Array.isArray(cfg.tools) ? cfg.tools : []), ...memScriptToolsFor(name)])],
     prompt: parts.join('\n\n')
   }
 }
@@ -734,5 +826,6 @@ module.exports = {
   resolveInArch, resolveInDir, loadConfigAt,
   archBinding, runOrganize, runExtract, resetLedger,
   addCategory, setCategory, removeCategory, listCategories,
-  cloneForSession, sessionCopyDir, hasSessionCopy, removeSessionCopy
+  cloneForSession, sessionCopyDir, hasSessionCopy, removeSessionCopy,
+  memScriptToolsFor, memScriptToolDefsFor, allMemScriptToolDefs, execMemScriptTool, reloadMemScripts
 }
