@@ -125,16 +125,6 @@ const MCP_TOOLS = [
       memories: { type: 'array', description: '可选，记忆架构名列表（如 ["pid-tuning"]）' }
     },
     ['id']
-  ),
-  tool('create_protocol', '创建一个 A2A 安全协议（.protocol.py 文件），供画布协议节点作为智能体间通信网关引用。',
-    {
-      name: { type: 'string', description: '协议名（如 pid-handoff）' },
-      desc: { type: 'string', description: '可选，协议说明' },
-      identity: { type: 'string', description: '可选，本协议身份声明（默认协议名）' },
-      allowedPeers: { type: 'array', description: '可选，允许来源 peer 列表（留空=不限制）' },
-      deniedPeers: { type: 'array', description: '可选，拒绝来源 peer 列表' }
-    },
-    ['name']
   )
 ]
 
@@ -370,39 +360,6 @@ def system_prompt(ctx):
       }
       deps.defStore.save(patch)
       return `智能体「${patch.name}」已更新 id=${id}（技能 ${(patch.skills || []).length} 个 / 工具 ${(patch.tools || []).length} 个 / 记忆 ${(patch.memories || []).length} 个）`
-    }
-    case 'create_protocol': {
-      const name = String(args.name || '').trim().replace(/[^A-Za-z0-9_\u4e00-\u9fa5-]/g, '_')
-      if (!name) throw new Error('协议名不能为空')
-      const protocols = require('./protocols')
-      let proto = protocols.get(name)
-      if (!proto) proto = protocols.create(name)
-      const identity = String(args.identity || name).trim()
-      const desc = String(args.desc || '').trim()
-      const allowedPeers = Array.isArray(args.allowedPeers) ? args.allowedPeers.map(String) : []
-      const deniedPeers = Array.isArray(args.deniedPeers) ? args.deniedPeers.map(String) : []
-      const content = `# ============================================================
-# 协议：${name}（A2A 安全协议）
-${desc ? `# ${desc}\n` : ''}
-# 画布「协议节点」引用它，运行时作为智能体间通信网关：
-#   访问控制（允许/拒绝来源）→ [[A2A]] 信封封装 → 审计留痕。
-# ============================================================
-PROTOCOL_ENABLED = True
-PROTOCOL_VERSION = "A2A/1.0"
-PROTOCOL_IDENTITY = ${JSON.stringify(identity)}
-PROTOCOL_ENDPOINT = ""
-PROTOCOL_AUTH_TYPE = "none"
-PROTOCOL_AUTH_SECRET = ""
-PROTOCOL_ALLOWED_PEERS = ${JSON.stringify(allowedPeers)}
-PROTOCOL_DENIED_PEERS = ${JSON.stringify(deniedPeers)}
-# 工具级访问控制（可选）：非空时仅放行名单内工具
-PROTOCOL_ALLOWED_TOOLS = []
-PROTOCOL_DENIED_TOOLS = []
-PROTOCOL_AUDIT = True
-`
-      protocols.write(name, content)
-      const meta = protocols.get(name)
-      return `协议「${name}」已创建（identity=${meta.identity}，允许 ${(meta.access.allowedPeers || []).length} / 拒绝 ${(meta.access.deniedPeers || []).length}）`
     }
     default:
       throw new Error('未知 MCP 工具: ' + name)

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js'
 import { h, fmtTime } from '../lib/harness.js'
 import SearchSelect from './SearchSelect.jsx'
-import A2AEditor from './A2AEditor.jsx'
 import CategoryModal from './CategoryModal.jsx'
 
 const NODE_W = 210
@@ -16,7 +15,6 @@ const NODE_META = {
   input: { icon: '⌨️', name: '输入', color: 'rgba(110,168,255,0.14)' },
   skill: { icon: '🤖', name: '技能', color: 'rgba(139,124,246,0.14)' },
   tool: { icon: '🔧', name: '工具', color: 'rgba(63,208,201,0.14)' },
-  protocol: { icon: '🔐', name: '协议', color: 'rgba(255,196,90,0.15)' },
   subagent: { icon: '🔄', name: '子智能体', color: 'rgba(250,170,60,0.13)' },
   bus: { icon: '🚌', name: '通信总线', color: 'rgba(90,180,255,0.13)' },
   flow: { icon: '🔀', name: '控制流', color: 'rgba(255,196,90,0.15)' },
@@ -165,9 +163,6 @@ function makeNode(type, x, y, skills) {
     // 自定义模块节点：执行用户定义的 Python 代码（def run(input_text)）
     return { ...base, customId: '', code: '', w: 210, h: 140 }
   }
-  if (type === 'protocol') {
-    return { ...base, protocolId: '', w: 210, h: 74 }
-  }
   if (type === 'bus') {
     // 通信总线节点：长条形主干道，外部节点（技能/记忆）拖线挂到连接点（points）上按序处理
     return { ...base, points: [], w: 480, h: 150 }
@@ -184,7 +179,7 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 const MINI_W = 168
 const MINI_H = 116
 
-export default function AgentPanel({ skills, agRunning = false, agRunStates = {}, agNodeOutputs = {}, onRunStart, onToast, onEditSkill, onEditProtocol, onEditMcp }) {
+export default function AgentPanel({ skills, agRunning = false, agRunStates = {}, agNodeOutputs = {}, onRunStart, onToast, onEditSkill, onEditMcp }) {
   const [agents, setAgents] = useState([])
   const [defs, setDefs] = useState([]) // 智能体定义（「智能体」栏）：子智能体节点可选
   const [mode, setMode] = useState('list') // 'list' | 'canvas'
@@ -206,13 +201,9 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
   const [linkQ, setLinkQ] = useState('') // 链接弹窗搜索关键字
   const [toolCatalog, setToolCatalog] = useState(null) // {builtin, toolPacks} 工具数据源（懒加载）
   const [memoryList, setMemoryList] = useState([]) // 记忆架构列表（记忆节点用）
-  const [protocolList, setProtocolList] = useState([]) // 协议列表（协议节点用）
   // 记忆节点读取/写入接口弹窗
   const [memIfModal, setMemIfModal] = useState(null) // {nodeId, kind:'read'|'write'}
   const [memIfDraft, setMemIfDraft] = useState({ label: '', arch: '', scope: '' })
-  // A2A 安全协议编辑弹窗（智能体节点卡片可直接编辑协议）
-  const [protoModal, setProtoModal] = useState(null) // {nodeId}
-  const [protoDraft, setProtoDraft] = useState(null) // protocol 草稿
   // 画布配置尺寸（节点超出会自动扩展）+ 多选 + 框选
   const [canvasCfg, setCanvasCfg] = useState({ w: 1600, h: 1000 })
   const [selectedNodes, setSelectedNodes] = useState(() => new Set())
@@ -319,7 +310,6 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
       h.agdefs.list().then(setDefs).catch(() => {})
     })()
     h.memory.list().then(setMemoryList).catch(() => {})
-    h.protocols.list().then(setProtocolList).catch(() => {})
     h.tools.list().then(setToolCatalog).catch(() => {})
     h.customNodes.list().then(setCustomNodes).catch(() => {})
     const unStatus = h.agents.onStatus(({ nodeId, status, error }) => {
@@ -440,39 +430,6 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
     if (!node) return
     const key = kind === 'read' ? 'reads' : 'writes'
     updateNode(nodeId, { [key]: (node[key] || []).filter((x) => x.id !== ifId) })
-  }
-
-  // ---- A2A 安全协议（智能体节点卡片直接编辑）----
-  const openProto = (nodeId) => {
-    const node = wf?.nodes?.find((n) => n.id === nodeId)
-    if (!node) return
-    const p = node.protocol || {}
-    setProtoDraft({
-      enabled: p.enabled !== false,
-      version: p.version || 'A2A/1.0',
-      identity: p.identity || node.skillId || '',
-      endpoint: p.endpoint || '',
-      auth: { type: (p.auth && p.auth.type) || 'none', secret: (p.auth && p.auth.secret) || '' },
-      access: {
-        allowedPeers: Array.isArray(p.access && p.access.allowedPeers) ? [...p.access.allowedPeers] : [],
-        deniedPeers: Array.isArray(p.access && p.access.deniedPeers) ? [...p.access.deniedPeers] : [],
-        allowedTools: Array.isArray(p.access && p.access.allowedTools) ? [...p.access.allowedTools] : [],
-        deniedTools: Array.isArray(p.access && p.access.deniedTools) ? [...p.access.deniedTools] : []
-      },
-      audit: p.audit !== false
-    })
-    setProtoModal({ nodeId })
-  }
-  const setProtoDraftField = (patch) => setProtoDraft((d) => ({ ...d, ...patch }))
-  const setProtoPeers = (key, text) => {
-    const list = String(text || '').split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
-    setProtoDraft((d) => ({ ...d, access: { ...d.access, [key]: list } }))
-  }
-  const saveProto = () => {
-    if (!protoModal || !protoDraft) return
-    updateNode(protoModal.nodeId, { protocol: protoDraft })
-    setProtoModal(null)
-    onToast?.(protoDraft.enabled ? 'A2A 安全协议已启用（运行时校验来源并写审计日志）' : 'A2A 安全协议已关闭', 'success')
   }
 
   // ---- 工具/技能链接 ----
@@ -1192,7 +1149,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
           <div>
             <h2>工作流</h2>
             <p className="panel-sub">
-              工作流 = 可视化编排多个技能 / 工具 / 协议 / 记忆 / 智能体 / 通信总线协作完成复杂任务。
+              工作流 = 可视化编排多个技能 / 工具 / 记忆 / 智能体 / 通信总线协作完成复杂任务。
               点卡片进入画布编排
             </p>
           </div>
@@ -1422,7 +1379,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                 className={'wf-node' + (isSel ? ' selected' : '')}
                 data-ctx-node={n.id}
                 data-type={n.type}
-                onDoubleClick={(e) => { if (n.type === 'protocol' && n.protocolId) { onEditProtocol?.(n.protocolId); return }; if (n.type === 'tool' && !e.target.closest('textarea, input, select, button, .search-select')) openToolSource(n) }}
+                onDoubleClick={(e) => { if (n.type === 'tool' && !e.target.closest('textarea, input, select, button, .search-select')) openToolSource(n) }}
                 style={{ left: n.x, top: n.y, width: n.w || NODE_W, ...(n.h ? { height: n.h } : {}), background: meta.color, ['--wf-fs']: Math.min(3.2, Math.max(0.85, Math.sqrt(((n.w || NODE_W) / NODE_W) * ((n.h || 150) / 150)))) }}
               >
                 <div className="wf-node-head" data-drag-node={n.id}>
@@ -1480,7 +1437,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                           title="通信总线：该技能可以写入的区域（[[区域名]]...[[/区域名]]），留空=不限制"
                         />
                       </div>
-                      {/* 内嵌记忆：工具、协议、技能已改用独立节点 */}
+                      {/* 内嵌记忆：工具、技能已改用独立节点 */}
                       {renderNodeLinks(n)}
                     </>
                   )}
@@ -1710,19 +1667,6 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                       )}
                     </>
                   )}
-                  {n.type === 'protocol' && (
-                    <>
-                      <SearchSelect
-                        className="wf-agent-select"
-                        items={protocolList.map((p) => ({ id: p.name, label: `🔐 ${p.name}`, desc: `${p.version || 'A2A/1.0'} · 身份 ${p.identity || p.name}`, icon: '🔐', keywords: `协议 ${p.name}` }))}
-                        value={n.protocolId || ''}
-                        onChange={(id) => updateNode(n.id, { protocolId: id })}
-                        placeholder="🔍 搜索协议…"
-                        empty="无匹配协议"
-                      />
-                      <div className="wf-subflow-hint" onDoubleClick={() => n.protocolId && onEditProtocol?.(n.protocolId)}>双击节点编辑协议源码</div>
-                    </>
-                  )}
                 </div>
                 <span className="wf-port in" title="输入端口：从上游接入" />
                 <span className="wf-port out" title="输出端口：拖到下一节点输入" onMouseDown={(e) => onConnectStart(e, n.id)} />
@@ -1766,7 +1710,6 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
                 <button className="wf-ctxmenu-item" onClick={() => addNodeAt('input', ctxMenu.wx, ctxMenu.wy)}>⌨️ 输入</button>
                 <button className="wf-ctxmenu-item" onClick={() => addNodeAt('skill', ctxMenu.wx, ctxMenu.wy)}>🤖 技能</button>
                 <button className="wf-ctxmenu-item" onClick={() => addNodeAt('tool', ctxMenu.wx, ctxMenu.wy)}>🔧 工具节点</button>
-                <button className="wf-ctxmenu-item" onClick={() => addNodeAt('protocol', ctxMenu.wx, ctxMenu.wy)}>🔐 协议节点</button>
                 <button className="wf-ctxmenu-item" onClick={() => addNodeAt('subagent', ctxMenu.wx, ctxMenu.wy)}>🔄 子智能体</button>
                 <button className="wf-ctxmenu-item" onClick={() => addNodeAt('bus', ctxMenu.wx, ctxMenu.wy)}>🚌 通信总线</button>
                  <button className="wf-ctxmenu-item" onClick={() => addNodeAt('flow', ctxMenu.wx, ctxMenu.wy)}>🔀 控制流</button>
@@ -2092,7 +2035,7 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
         )}
 
         <div className="wf-hint">
-          从节点右侧 <b>● 输出端口</b> 拖到下一节点左侧 <b>● 输入端口</b> 连线 · <b>左键拖拽空白</b>框选多个节点（可整体拖动，Shift 追加，Delete 删除选中） · <b>右键空白</b>新建节点（输入/技能/工具/协议/子智能体/记忆/通信总线/输出） · <b>右键节点/连线</b>操作菜单 · <b>中键拖拽</b>平移 · <b>滚轮</b>缩放 · 右上<b>画布</b>可设尺寸 · 右下角<b>小地图</b>快速定位 · <b>Ctrl+S</b> 保存
+          从节点右侧 <b>● 输出端口</b> 拖到下一节点左侧 <b>● 输入端口</b> 连线 · <b>左键拖拽空白</b>框选多个节点（可整体拖动，Shift 追加，Delete 删除选中） · <b>右键空白</b>新建节点（输入/技能/工具/子智能体/记忆/通信总线/输出） · <b>右键节点/连线</b>操作菜单 · <b>中键拖拽</b>平移 · <b>滚轮</b>缩放 · 右上<b>画布</b>可设尺寸 · 右下角<b>小地图</b>快速定位 · <b>Ctrl+S</b> 保存
         </div>
       </div>
 
@@ -2262,17 +2205,6 @@ export default function AgentPanel({ skills, agRunning = false, agRunStates = {}
           </div>
         </div>
       )}
-
-      {/* A2A 安全协议编辑弹窗（智能体节点卡片直接编辑，共享组件） */}
-      <A2AEditor
-        open={!!(protoModal && protoDraft)}
-        title={`🔐 A2A 安全协议（${protoModal ? (((wf?.nodes || []).find((n) => n.id === protoModal.nodeId))?.label || protoModal.nodeId || '') : ''}）`}
-        draft={protoDraft}
-        onChange={setProtoDraftField}
-        onPeers={setProtoPeers}
-        onSave={saveProto}
-        onCancel={() => setProtoModal(null)}
-      />
 
       {/* 导出为大型 Agent */}
       {ex && (

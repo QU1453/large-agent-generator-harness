@@ -671,14 +671,9 @@ code, pre, .msg-meta, .session-meta, .trace-status, .nav-count { font-family: va
     0 0 12px rgba(224, 122, 46, 0.72);
 }
 
-/* 记忆画布节点 / 协议启用态 */
+/* 记忆画布节点 */
 .mem-canvas-node.link-src {
   box-shadow: 0 0 0 1px var(--amber), 0 0 14px rgba(224, 122, 46, 0.4);
-}
-.mem-proto-btn.on {
-  background: var(--grad-soft);
-  border-color: rgba(224, 122, 46, 0.52);
-  color: var(--amber);
 }
 
 /* 团队对话 AI 消息 */

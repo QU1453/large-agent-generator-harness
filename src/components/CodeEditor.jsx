@@ -4,14 +4,12 @@ import { h } from '../lib/harness.js'
 
 const LANGS = {
   skill: 'javascript',
-  toolPack: 'javascript',
-  protocol: 'python'
+  toolPack: 'javascript'
 }
 
 const LABELS = {
   skill: { icon: '🤖', name: '技能' },
-  toolPack: { icon: '🔧', name: '工具' },
-  protocol: { icon: '🔐', name: '协议' }
+  toolPack: { icon: '🔧', name: '工具' }
 }
 
 // 内置代码编辑器：应用内直接编辑智能体 / 工具源码，保存后自动重载
@@ -29,7 +27,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
   const [error, setError] = useState(null)
   const taRef = useRef(null) // textarea 为非受控，文件加载后经 ref 一次性写入
 
-  // 协议 / 工具「运行 & 调试」：协议可运行 .py 验证；工具可逐个测试
+  // 工具「运行 & 调试」：可逐个测试工具包内的工具
   const [running, setRunning] = useState(false)
   const [runOut, setRunOut] = useState(null) // {ok, ...} 运行输出
   const [testOpen, setTestOpen] = useState(false)
@@ -41,13 +39,8 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
   useEffect(() => {
     ;(async () => {
       try {
-        let data = null
-        if (kind === 'protocol') {
-          data = await h.protocols.read(id)
-        } else {
-          const api = kind === 'skill' ? h.skills : h.toolPacks
-          data = file ? await api.readFile(file) : await api.read(id)
-        }
+        const api = kind === 'skill' ? h.skills : h.toolPacks
+        const data = file ? await api.readFile(file) : await api.read(id)
         if (!data) throw new Error('文件不存在')
         setCode(data.content)
         setFilePath(data.file)
@@ -69,7 +62,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
       json: 'json', md: 'markdown', html: 'xml', htm: 'xml', css: 'css',
       sh: 'bash', bat: 'dos', ps1: 'powershell', yml: 'yaml', yaml: 'yaml',
       toml: 'ini', ini: 'ini', sql: 'sql', go: 'go', rs: 'rust', java: 'java',
-      skill: 'javascript', tool: 'javascript', protocol: 'python'
+      skill: 'javascript', tool: 'javascript'
     }
     if (map[ext]) return map[ext]
     if (/^[\w-]+$/.test(ext) && ext.length <= 12) return map[ext] || 'plaintext'
@@ -98,13 +91,8 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
     setSaving(true)
     setError(null)
     try {
-      let r = null
-      if (kind === 'protocol') {
-        r = await h.protocols.write(id, code)
-      } else {
-        const api = kind === 'skill' ? h.skills : h.toolPacks
-        r = file ? await api.writeFile(file, code) : await api.write(id, code)
-      }
+      const api = kind === 'skill' ? h.skills : h.toolPacks
+      const r = file ? await api.writeFile(file, code) : await api.write(id, code)
       if (!r || (r.ok === false)) throw new Error('保存失败')
       setDirty(false)
       onSaved && onSaved()
@@ -122,7 +110,7 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
     }
   }
 
-  // ---- 协议 / 工具「运行 & 调试」 ----
+  // ---- 工具「运行 & 调试」 ----
   const loadMcpTools = async () => {
     try {
       const t = await h.tools.list()
@@ -132,18 +120,6 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
       if (!list.length) setRunOut({ ok: false, error: '该工具包当前没有可测试的工具（保存重载后再试）' })
     } catch (e) {
       setRunOut({ ok: false, error: e.message || String(e) })
-    }
-  }
-
-  const runProtocol = async () => {
-    setRunning(true); setRunOut(null)
-    try {
-      if (dirty) await save()
-      setRunOut(await h.protocols.run(id))
-    } catch (e) {
-      setRunOut({ ok: false, error: e.message || String(e) })
-    } finally {
-      setRunning(false)
     }
   }
 
@@ -165,24 +141,6 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
   const formatRunOut = (r) => {
     if (!r) return ''
     if (r.ok === false) return `❌ 失败：${r.error || r.stderr || '未知错误'}`
-    if (kind === 'protocol') {
-      const m = r.meta
-      const lines = [`✅ 运行成功（退出码 ${r.exitCode ?? 0}）`]
-      if (m) {
-        lines.push('', '—— 解析出的协议配置 ——',
-          `启用: ${m.enabled ? '是' : '否'}`,
-          `版本: ${m.version}`,
-          `身份: ${m.identity}`,
-          `端点: ${m.endpoint || '（空）'}`,
-          `认证: ${m.auth && m.auth.type ? m.auth.type : 'none'}`,
-          `允许来源: ${(m.access && m.access.allowedPeers || []).join(', ') || '不限制'}`,
-          `拒绝来源: ${(m.access && m.access.deniedPeers || []).join(', ') || '无'}`,
-          `审计: ${m.audit ? '开' : '关'}`)
-      }
-      if (r.stdout) lines.push('', '—— stdout ——', r.stdout)
-      if (r.stderr) lines.push('', '—— stderr ——', r.stderr)
-      return lines.join('\n')
-    }
     return `✅ 执行结果：\n${r.value ?? ''}`
   }
 
@@ -229,19 +187,12 @@ export default function CodeEditor({ kind, id, file, onClose, onSaved }) {
           </div>
         )}
 
-        {(kind === 'protocol' || kind === 'toolPack') && (
+        {kind === 'toolPack' && (
           <div className="editor-run">
             <div className="editor-run-bar">
-              {kind === 'protocol' ? (
-                <button className="btn small" disabled={running} onClick={runProtocol}>
-                  {running ? '运行中…' : '▶ 运行协议'}
-                </button>
-              ) : (
-                <button className="btn small" onClick={() => { const next = !testOpen; setTestOpen(next); if (next) loadMcpTools() }}>
-                  🧪 {testOpen ? '收起工具测试' : '测试工具'}
-                </button>
-              )}
-              {kind === 'protocol' && <span className="editor-run-hint">用 Python 执行 .protocol.py，验证语法并回显解析出的配置</span>}
+              <button className="btn small" onClick={() => { const next = !testOpen; setTestOpen(next); if (next) loadMcpTools() }}>
+                🧪 {testOpen ? '收起工具测试' : '测试工具'}
+              </button>
             </div>
 
             {kind === 'toolPack' && testOpen && (

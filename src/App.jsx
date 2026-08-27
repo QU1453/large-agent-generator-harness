@@ -6,7 +6,6 @@ import ToolPacksPanel from './components/ToolPacksPanel.jsx'
 import AgentPanel from './components/AgentPanel.jsx'
 import AgentAdmin from './components/AgentAdmin.jsx'
 import WorkspacePanel from './components/WorkspacePanel.jsx'
-import ProtocolPanel from './components/ProtocolPanel.jsx'
 import MemoryPanel from './components/MemoryPanel.jsx'
 import TeamPanel from './components/TeamPanel.jsx'
 import TerminalPanel from './components/TerminalPanel.jsx'
@@ -45,7 +44,6 @@ export default function App() {
   const [toolPacks, setToolPacks] = useState([])
   const [agents, setAgents] = useState([])
   const [memories, setMemories] = useState([])
-  const [protocols, setProtocols] = useState([])
   const [pyStatus, setPyStatus] = useState(null)
   const [sessions, setSessions] = useState([])
   const [sessionMap, setSessionMap] = useState({}) // id -> 完整会话
@@ -108,7 +106,7 @@ export default function App() {
   useEffect(() => {
     ;(async () => {
       try {
-        const [st, sk, ss, ws, api, mp, ag, sbx, mem, prot] = await Promise.all([
+        const [st, sk, ss, ws, api, mp, ag, sbx, mem] = await Promise.all([
           h.settings.get(),
           h.skills.list(),
           h.sessions.list(),
@@ -117,15 +115,13 @@ export default function App() {
           h.toolPacks.list(),
           h.agents.list(),
           h.workspace.sandboxes(),
-          h.memory.list(),
-          h.protocols.list()
+          h.memory.list()
         ])
         setSettings(st)
         setSkills(sk)
         setToolPacks(mp.toolPacks)
         setAgents(ag)
         setMemories(mem)
-        setProtocols(prot)
         setPyStatus(mp.python)
         setSessions(ss)
         setWorkspace(ws)
@@ -456,28 +452,6 @@ export default function App() {
             onChanged={async () => setSkills(await h.skills.list())}
           />
         )}
-        {view === 'protocols' && (
-          <ProtocolPanel
-            protocols={protocols}
-            onReload={async () => setProtocols(await h.protocols.list())}
-            onToast={showToast}
-            onCreate={async (name) => {
-              const p = await h.protocols.create(name)
-              setProtocols(await h.protocols.list())
-              setEditor({ kind: 'protocol', id: p.name })
-            }}
-            onEdit={(name) => setEditor({ kind: 'protocol', id: name })}
-            onDelete={async (name) => {
-              try {
-                await h.protocols.delete(name)
-                setProtocols(await h.protocols.list())
-                showToast(`协议「${name}」已删除`, 'success')
-              } catch (e) {
-                showToast(e.message || String(e), 'error')
-              }
-            }}
-          />
-        )}
         {view === 'memory' && (
           <MemoryPanel onToast={showToast} />
         )}
@@ -539,7 +513,6 @@ export default function App() {
             onRunStart={() => { setAgRunning(true); setAgRunStates({}); setAgNodeOutputs({}) }}
             onToast={showToast}
             onEditSkill={(id) => setEditor({ kind: 'skill', id })}
-            onEditProtocol={(name) => setEditor({ kind: 'protocol', id: name })}
             onEditMcp={(id) => setEditor({ kind: 'toolPack', id })}
           />
         )}
@@ -580,12 +553,10 @@ export default function App() {
           onSaved={() => {
             if (editor.kind === 'skill') {
               h.skills.list().then(setSkills)
-            } else if (editor.kind === 'protocol') {
-              h.protocols.list().then(setProtocols)
             } else {
               h.toolPacks.list().then(setToolPacks)
             }
-            const label = editor.kind === 'skill' ? '技能' : editor.kind === 'protocol' ? '协议' : '工具'
+            const label = editor.kind === 'skill' ? '技能' : '工具'
             showToast(`${label}已保存并重载`, 'success')
           }}
         />

@@ -12,7 +12,6 @@ const agent = require('./agent')
 const tools = require('./tools')
 const apiServer = require('./api-server')
 const exporter = require('./exporter')
-const protocols = require('./protocols')
 const memory = require('./memory')
 const team = require('./team')
 const terminal = require('./terminal')
@@ -362,7 +361,7 @@ function createWindow() {
             const vi = process.argv.indexOf('--shot-view')
             if (vi >= 0) shotViewName = process.argv[vi + 1]
           }
-          const views = ['chat', 'workflows', 'agents', 'protocols', 'skills', 'memory', 'toolPacks', 'terminal', 'team', 'workspace']
+          const views = ['chat', 'workflows', 'agents', 'skills', 'memory', 'toolPacks', 'terminal', 'team', 'workspace']
           const idx = views.indexOf(shotViewName)
           if (idx >= 0) {
               try { require('fs').writeFileSync(path.join(DATA_DIR, 'e2e-diag.json'), JSON.stringify({ step: 'before-nav-click', idx }, null, 2), 'utf8') } catch {}
@@ -1164,23 +1163,6 @@ module.exports = {
     return await exporter.buildExe({ outDir: opts.outDir, name: opts.name })
   })
 
-  // ---------------- 协议（智能体节点可链接协议） ----------------
-  ipcMain.handle('protocols:list', () => protocols.list())
-  ipcMain.handle('protocols:create', (_e, name) => protocols.create(name))
-  ipcMain.handle('protocols:read', (_e, name) => protocols.get(name))
-  ipcMain.handle('protocols:write', (_e, name, content) => protocols.write(name, content))
-  ipcMain.handle('protocols:delete', (_e, name) => protocols.remove(name))
-  ipcMain.handle('protocols:categories', () => protocols.listCategories())
-  ipcMain.handle('protocols:add-category', (_e, name) => protocols.addCategory(name))
-  ipcMain.handle('protocols:set-category', (_e, protoName, name) => protocols.setCategory(protoName, name))
-  ipcMain.handle('protocols:remove-category', (_e, name) => protocols.removeCategory(name))
-  // 协议「运行」：用 Python 执行 .protocol.py，验证语法并回传解析出的配置（调试用）
-  ipcMain.handle('protocols:run', (_e, name) => {
-    const p = protocols.get(name)
-    if (!p || !p.file) throw new Error('协议文件不存在')
-    const fs = require('fs')
-    return runPythonFile(p.file).then((r) => ({ ...r, meta: protocols.parseMeta(name, fs.readFileSync(p.file, 'utf8')) }))
-  })
   ipcMain.handle('memory:list', () => memory.list())
   ipcMain.handle('memory:create', (_e, name, content) => memory.create(name, content))
   ipcMain.handle('memory:delete', (_e, name) => memory.delete(name))
@@ -1357,7 +1339,6 @@ if (!gotLock) {
       builtin: builtinSkillsDir(),
       user: path.join(app.getPath('userData'), 'skills')
     })
-    protocols.init(app.getPath('userData'))
     memory.init(app.getPath('userData'))
     team.init(app.getPath('userData'))
     if (settings.teamName) team.setName(settings.teamName)

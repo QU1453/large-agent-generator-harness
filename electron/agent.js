@@ -1,5 +1,5 @@
 // 智能体（Agent）：可视化编排多个 skill 协作完成复杂任务
-// 节点类型：input(输入) / skill(能力单元) / tool(工具/MCP) / protocol(智能体间协议)
+// 节点类型：input(输入) / skill(能力单元) / tool(工具/MCP)
 //          / subagent(子智能体) / memory(记忆) / bus(通信总线) / output(输出)
 // 连线语义：from 节点的输出 → to 节点的输入（从左到右）
 const fs = require('fs')
@@ -9,7 +9,7 @@ const { spawn } = require('child_process')
 const chat = require('./chat')
 const skills = require('./skills')
 const memory = require('./memory')
-const protocols = require('./protocols')
+
 
 // 数据目录（与 main.js 一致）：绝不写 C 盘；内联工具临时脚本放 data/runs
 const DATA_DIR = process.env.AI_HARNESS_DATA || path.join('D:', path.sep, 'Project', 'Harness', 'data')
@@ -44,6 +44,94 @@ function runInlinePy(code, inputText) {
       resolve({ ok: false, error: e.message || String(e) })
     }
   })
+}
+
+// 运行自包含智能体（data/agent-defs/<id>/agent.py）：独立子进程，
+// stdin 传 JSON 载荷 {"input":..., "inject":{...}}，stdout 按 NDJSON 上报进度
+// （type: status/output/result/error，由共享运行时 harness_rt.py 引导产出）。
+// py-agent 自己调 LLM、自己执行工具，宿主只负责转传事件与收集最终结果。
+function runAgentPy(opts) {
+  const file = String(opts.agentPy || '')
+  const onEvent = opts.onEvent || (() => {})
+  const doRun = (py) => new Promise((resolve) => {
+    let child
+    let settled = false
+    let buf = ''
+    let stderr = ''
+    let result = null
+    const errors = []
+    const cleanup = () => {
+      clearTimeout(timer)
+      if (opts.signal) { try { opts.signal.removeEventListener('abort', onAbort) } catch { /* 忽略 */ } }
+    }
+    const settle = (r) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(r)
+    }
+    const killChild = () => { try { child && child.kill() } catch { /* 忽略 */ } }
+    const timer = setTimeout(killChild, opts.timeoutMs || 15 * 60 * 1000)
+    const onAbort = () => killChild()
+    try {
+      child = spawn(py.bin, ['-X', 'utf8', '-u', file], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        env: { ...process.env, PYTHONIOENCODING: 'utf8', AI_HARNESS_DATA: opts.dataDir || DATA_DIR }
+      })
+    } catch (e) {
+      cleanup()
+      resolve({ ok: false, error: 'Python 启动失败: ' + (e.message || e) })
+      return
+    }
+    if (opts.signal) {
+      if (opts.signal.aborted) killChild()
+      else { try { opts.signal.addEventListener('abort', onAbort) } catch { /* 忽略 */ } }
+    }
+    child.on('error', (e) => settle({ ok: false, error: 'Python 启动失败: ' + (e.message || e) }))
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      buf += chunk
+      let idx
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim()
+        buf = buf.slice(idx + 1)
+        if (!line) continue
+        let ev = null
+        try { ev = JSON.parse(line) } catch { /* 非 JSON 行忽略 */ }
+        if (!ev || !ev.type) continue
+        if (ev.type === 'result') { result = ev.text == null ? '' : String(ev.text); continue }
+        if (ev.type === 'error') { errors.push(String(ev.error || '未知错误')); continue }
+        onEvent(ev)
+        if (ev.type === 'output' && typeof opts.onOutput === 'function') opts.onOutput(String(ev.text || ''))
+        if (ev.type === 'status' && typeof opts.onStatus === 'function') opts.onStatus(ev)
+      }
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (d) => {
+      stderr += d
+      if (stderr.length > 20000) stderr = stderr.slice(-20000)
+    })
+    try {
+      child.stdin.write(JSON.stringify({ input: String(opts.inputText == null ? '' : opts.inputText), inject: opts.inject || null }) + '\n')
+      child.stdin.end()
+    } catch { /* 管道写入失败留给 close 处理 */ }
+    child.on('close', (code) => {
+      if (opts.signal && opts.signal.aborted) settle({ ok: false, aborted: true, error: '已中止' })
+      else if (errors.length) settle({ ok: false, error: errors.join('\n'), stderr })
+      else if (result !== null) settle({ ok: true, result })
+      else settle({ ok: code === 0, error: code === 0 ? '智能体无输出' : `退出码 ${code}`, stderr })
+    })
+  })
+  try {
+    if (!file || !fs.existsSync(file)) return Promise.resolve({ ok: false, error: `智能体文件不存在: ${file}` })
+    const { checkPython } = require('./python-engine')
+    const py = checkPython()
+    if (!py.available) return Promise.resolve({ ok: false, error: '未检测到 Python，无法运行自包含智能体' })
+    return doRun(py)
+  } catch (e) {
+    return Promise.resolve({ ok: false, error: e.message || String(e) })
+  }
 }
 
 // ---------------- 存储 ----------------
@@ -180,19 +268,293 @@ function createAgentStore(userDataDir) {
   }
 }
 
-// ---------------- 智能体定义（data/agent-defs）----------------
-// 「智能体」栏：单智能体 = 模型配置（继承/自定义）+ 提示词 + 技能列表 + 工具列表。
-// 存储改为目录式：data/agent-defs/<id>/agent.json（主定义文件）+ 自由辅助文件（说明文档/代码片段等），
-// 编辑方式与技能/记忆一致：卡片点开 → 文件工作台（左文件树 / 中编辑器 / 右信息）。
-// 工作流（画布）里的子智能体节点可直接引用智能体定义，运行时把定义转成最小图执行。
+// ---------------- 智能体定义（data/agent-defs，自包含 agent.py 形态）----------------
+// 「智能体」栏：单智能体 = 一个 .py 文件。agent.py 是唯一真源：
+//   - 头部 AGENT_* 大写常量 = 元数据（id/名称/提示词/技能/工具/记忆/模型），由宿主静态解析；
+//   - run(input_text, ctx) = 自包含主循环，自己调 LLM、自己执行工具，
+//     经共享运行时 data/agent-defs/_runtime/harness_rt.py 引导，可脱离宿主直接运行：
+//       echo 任务 | python agent.py
+// 目录内仍允许自由辅助文件；旧版 agent.json 主定义在装载时自动迁移为 agent.py
+// （原始内容更名为 agent.legacy.json 保留）。画布的子智能体节点引用时：
+//   agent.py 形态 → 子进程运行该文件；兼容期残留 agent.json → 转最小图执行（见 defToGraph）。
+
+// agent.py 元数据区标记：save 只重写两标记之间，用户的自定义代码零侵入
+const AGENT_PY_MARK = {
+  begin: '# ===== LAG AGENT HEADER BEGIN =====',
+  end: '# ===== LAG AGENT HEADER END ====='
+}
+
+// Python 字面量跳过空白/注释
+function pySkipWs(src, i) {
+  while (i < src.length) {
+    const c = src[i]
+    if (c === ' ' || c === '\t' || c === '\r' || c === '\n') { i++; continue }
+    if (c === '#') { while (i < src.length && src[i] !== '\n') i++; continue }
+    break
+  }
+  return i
+}
+
+// Python 字符串字面量 → JS 字符串（' ''' 三种引号 + 常用转义）
+function parsePyString(src, i) {
+  const three = src.slice(i, i + 3)
+  const multi = three === `"""` || three === `'''`
+  const q = multi ? three : src[i]
+  i += q.length
+  let out = ''
+  while (i < src.length) {
+    if (multi && src.startsWith(q, i)) return [out, i + q.length]
+    if (!multi && src[i] === q) return [out, i + 1]
+    if (src[i] === '\\') {
+      const n = src[i + 1]
+      const map = { n: '\n', t: '\t', r: '\r' }
+      if (n === '\n') { i += 2; continue }
+      if (n === "'" || n === '"' || n === '\\') { out += n; i += 2; continue }
+      if (n in map) { out += map[n]; i += 2; continue }
+      out += src[i]; i++; continue
+    }
+    out += src[i]; i++
+  }
+  return [out, i]
+}
+
+// Python 值字面量 → JS 值（str/list/dict/数字/True/False/None，支持嵌套与注释）
+function parsePyValue(src, i) {
+  i = pySkipWs(src, i)
+  const c = src[i]
+  if (c === '"' || c === `'`) return parsePyString(src, i)
+  if (src.startsWith('True', i)) return [true, i + 4]
+  if (src.startsWith('False', i)) return [false, i + 5]
+  if (src.startsWith('None', i)) return [null, i + 4]
+  if (c === '[' || c === '{') {
+    const close = c === '[' ? ']' : '}'
+    const isDict = c === '{'
+    i++
+    const arr = []
+    const obj = {}
+    for (;;) {
+      i = pySkipWs(src, i)
+      if (src[i] === close) return [isDict ? obj : arr, i + 1]
+      if (src[i] === ',') { i++; continue }
+      if (i >= src.length) throw new Error('py value 未闭合')
+      let key
+      if (isDict) {
+        if (src[i] === '"' || src[i] === `'`) { const r = parsePyString(src, i); key = r[0]; i = r[1] }
+        else {
+          let j = i
+          while (j < src.length && src[j] !== ':' && src[j] !== '\n' && src[j] !== ',' && src[j] !== '}') j++
+          key = src.slice(i, j).trim()
+          i = j
+        }
+        i = pySkipWs(src, i)
+        if (src[i] === ':') i++
+      }
+      const r = parsePyValue(src, i)
+      i = r[1]
+      if (isDict) obj[key] = r[0]
+      else arr.push(r[0])
+      i = pySkipWs(src, i)
+      if (src[i] === ',') { i++; continue }
+      if (src[i] === close) return [isDict ? obj : arr, i + 1]
+      if (i >= src.length) throw new Error('py value 未闭合')
+      i++ // 容忍异常字符
+    }
+  }
+  const m = /^-?\d+(\.\d+)?/.exec(src.slice(i, i + 64))
+  if (m) return [parseFloat(m[0]), i + m[0].length]
+  const bad = new Error(`无法解析 Python 字面量 @${i}`)
+  throw bad
+}
+
+// 解析 agent.py 的 AGENT_* 元数据区（仅在标记间扫描，正文中的同名常量不受影响）
+function parseAgentHeader(source) {
+  const s = String(source || '')
+  const b = s.indexOf(AGENT_PY_MARK.begin)
+  const e = s.indexOf(AGENT_PY_MARK.end)
+  const block = b >= 0 && e > b ? s.slice(b + AGENT_PY_MARK.begin.length, e) : s
+  const meta = {}
+  const re = /^\s*(AGENT_[A-Z0-9_]+)\s*=\s*/gm
+  let m
+  while ((m = re.exec(block))) {
+    try {
+      const r = parsePyValue(block, re.lastIndex)
+      meta[m[1]] = r[0]
+      re.lastIndex = r[1]
+    } catch { /* 单项解析失败不影响其余 */ }
+  }
+  return meta
+}
+
+// JS 值 → Python 字面量文本
+function pyVal(v) {
+  if (v === true) return 'True'
+  if (v === false) return 'False'
+  if (v === null || v === undefined) return 'None'
+  if (typeof v === 'number') return String(v)
+  if (typeof v === 'string') return /\n/.test(v) ? pyTripleQuote(v) : JSON.stringify(v)
+  if (Array.isArray(v)) return '[\n' + v.map((x) => '    ' + pyVal(x) + ',').join('\n') + '\n]'
+  if (typeof v === 'object') {
+    return '{\n' + Object.entries(v).map(([k, x]) => `    ${JSON.stringify(k)}: ${pyVal(x)},`).join('\n') + '\n}'
+  }
+  return 'None'
+}
+
+// 多行字符串：优先 """，内部出现 """ 时换用 '''，再冲突退化为 JSON 风格单行长串
+function pyTripleQuote(text) {
+  const t = String(text == null ? '' : text)
+  if (!t.includes('"""')) return `"""${t}"""`
+  if (!t.includes("'''")) return `'''${t}'''`
+  return JSON.stringify(t)
+}
+
+// 元数据区公共生成器（compose 全量与 upsert 局部共用，保证格式一致）
+function agentPyHeaderLines(def) {
+  const rows = [
+    `AGENT_ID = ${JSON.stringify(String(def.id || ''))}`,
+    `AGENT_NAME = ${JSON.stringify(String(def.name || def.id || '未命名智能体'))}`,
+    `AGENT_DESC = ${pyTripleQuote(def.description || '')}`,
+    `AGENT_SYSTEM_PROMPT = ${pyTripleQuote(def.systemPrompt || '')}`,
+    `AGENT_SKILLS = ${pyVal(Array.isArray(def.skills) ? def.skills : [])}`,
+    `AGENT_TOOLS = ${pyVal(Array.isArray(def.tools) ? def.tools : [])}`,
+    `AGENT_MEMORIES = ${pyVal(Array.isArray(def.memories) ? def.memories : [])}`
+  ]
+  if (def.model && def.model.inherit) {
+    rows.push('AGENT_MODEL = None')
+  } else {
+    const mdl = {
+      base_url: (def.model && def.model.baseUrl) || '',
+      api_key: (def.model && def.model.apiKey) || '',
+      model: (def.model && def.model.model) || ''
+    }
+    if (typeof def.temperature === 'number') mdl.temperature = def.temperature
+    if (typeof def.maxTokens === 'number') mdl.max_tokens = def.maxTokens
+    rows.push(`AGENT_MODEL = ${pyVal(mdl)}`)
+  }
+  if (typeof def.createdAt === 'number') rows.push(`AGENT_CREATED_AT = ${Math.round(def.createdAt)}`)
+  return [AGENT_PY_MARK.begin, ...rows, AGENT_PY_MARK.end].join('\n')
+}
+
+// agent.py 全量模板（新建/迁移用）：导入引导 + 元数据区 + 默认主循环
+function composeAgentPy(def) {
+  const lines = [
+    '# ============================================================',
+    `# 智能体：${def.name || def.id}`,
+    '# 自包含定义：头部 AGENT_* 元数据由宿主解析展示；run(input_text, ctx)',
+    '# 是独立主循环（自己调 LLM、自己执行工具）。可脱离宿主直接运行：',
+    '#   echo 任务 | python agent.py',
+    '# 共享运行时：data/agent-defs/_runtime/harness_rt.py（纯标准库）',
+    '# ============================================================',
+    '',
+    'import os',
+    'import sys',
+    '',
+    'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_runtime"))',
+    '',
+    agentPyHeaderLines(def),
+    '',
+    '',
+    '# ---------------- 自包含主循环 ----------------',
+    '# 默认 run：ctx.agent_loop 按 AGENT_SYSTEM_PROMPT + 技能提示词驱动工具循环。',
+    '# 需要定制流程时改写本函数，可用能力：',
+    '#   ctx.llm(messages)          直接调用 LLM（自动携带已声明工具集）',
+    '#   ctx.call_tool(name, args)  手动执行工具',
+    '#   ctx.emit_output(text)      向宿主上报中间进度',
+    '#   ctx.agent_loop(input, system_prompt=None, max_rounds=None)',
+    'def run(input_text, ctx):',
+    '    return ctx.agent_loop(input_text)',
+    '',
+    '',
+    'if __name__ == "__main__":',
+    '    from harness_rt import bootstrap',
+    '    bootstrap(dict(globals()))',
+    ''
+  ]
+  return lines.join('\n')
+}
+
+// 只替换元数据区（标记之间），其余正文原样保留；无标记的手写文件把区段追加到末尾
+function upsertAgentPyHeader(existingSource, def) {
+  const block = agentPyHeaderLines(def)
+  const s = String(existingSource || '')
+  const b = s.indexOf(AGENT_PY_MARK.begin)
+  const e = s.indexOf(AGENT_PY_MARK.end)
+  if (b >= 0 && e > b) {
+    return s.slice(0, b) + block + s.slice(e + AGENT_PY_MARK.end.length)
+  }
+  return s.replace(/\s*$/, '') + '\n\n\n' + block + '\n'
+}
+
+// 导出清洗：元数据区中的真实 baseUrl/apiKey 替换为 env: 占位符（用户铁律：导出物绝不携带真实密钥）
+function sanitizeAgentPySource(source) {
+  const s = String(source || '')
+  const b = s.indexOf(AGENT_PY_MARK.begin)
+  const e = s.indexOf(AGENT_PY_MARK.end)
+  if (b < 0 || e <= b) return s
+  const def = agentPyToDef('__export__', s, {})
+  if (!def.model || def.model.inherit !== false) return s
+  return upsertAgentPyHeader(s, {
+    ...def,
+    model: { ...def.model, baseUrl: 'env:LLM_BASE_URL', apiKey: 'env:LLM_API_KEY' }
+  })
+}
+
+// 解析后的元数据 → 统一定义对象（对外字段与旧版 agent.json 一致，便于全链路无感）
+function agentPyToDef(dirId, source, extras) {
+  const meta = parseAgentHeader(source)
+  const str = (v, d) => (typeof v === 'string' && v.length ? v : d)
+  const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : [])
+  const rawModel = meta.AGENT_MODEL
+  const mdict = (rawModel && typeof rawModel === 'object' && !Array.isArray(rawModel)) ? rawModel : null
+  let model = { inherit: true }
+  if (mdict) {
+    const baseUrl = String(mdict.base_url || mdict.baseUrl || '').trim()
+    const apiKey = String(mdict.api_key || mdict.apiKey || '').trim()
+    const mdl = String(mdict.model || '').trim()
+    if (baseUrl || apiKey || mdl) model = { inherit: false, baseUrl, apiKey, model: mdl }
+  }
+  const def = {
+    id: str(meta.AGENT_ID, dirId),
+    name: str(meta.AGENT_NAME, dirId),
+    description: typeof meta.AGENT_DESC === 'string' ? meta.AGENT_DESC : str(meta.AGENT_DESCRIPTION, ''),
+    systemPrompt: str(meta.AGENT_SYSTEM_PROMPT, ''),
+    skills: arr(meta.AGENT_SKILLS),
+    tools: arr(meta.AGENT_TOOLS),
+    memories: arr(meta.AGENT_MEMORIES),
+    model,
+    // 温度/最大 token：独立变量优先，回落 AGENT_MODEL dict 内字段（生成端写 dict，两端须对称）
+    temperature: typeof meta.AGENT_TEMPERATURE === 'number' ? meta.AGENT_TEMPERATURE
+      : (mdict && typeof mdict.temperature === 'number' ? mdict.temperature : undefined),
+    maxTokens: typeof meta.AGENT_MAX_TOKENS === 'number' ? meta.AGENT_MAX_TOKENS
+      : (mdict && typeof mdict.max_tokens === 'number' ? mdict.max_tokens : undefined),
+    maxRounds: typeof meta.AGENT_MAX_ROUNDS === 'number' ? meta.AGENT_MAX_ROUNDS : undefined,
+    form: 'py',
+    pyFile: extras.pyFile,
+    dir: extras.dir || null,
+    createdAt: typeof meta.AGENT_CREATED_AT === 'number' ? meta.AGENT_CREATED_AT : (extras.createdAt || extras.updatedAt || 0),
+    updatedAt: extras.updatedAt || 0
+  }
+  return def
+}
+
+// 从 agent.py 直接保存表单字段时的白名单投影（丢弃运行态字段）
+function sanitizeAgentPyInput(def) {
+  const pick = ['id', 'name', 'description', 'systemPrompt', 'skills', 'tools', 'memories', 'model', 'temperature', 'maxTokens']
+  const out = {}
+  for (const k of pick) if (def[k] !== undefined) out[k] = def[k]
+  if (typeof def.createdAt === 'number') out.createdAt = def.createdAt
+  return out
+}
+
 function createAgentDefStore(userDataDir) {
   const dir = path.join(userDataDir, 'agent-defs')
   fs.mkdirSync(dir, { recursive: true })
-  const MAIN = 'agent.json'
+  const MAIN = 'agent.py'
+  const LEGACY_MAIN = 'agent.json'
+  const LEGACY_KEEP = 'agent.legacy.json'
   const CATS_FILE = 'categories.json'
 
-  // 迁移旧单文件：data/agent-defs/<id>.json → data/agent-defs/<id>/agent.json
-  const migrateLegacy = () => {
+  // 迁移一：旧扁平单文件 data/agent-defs/<id>.json → data/agent-defs/<id>/agent.json
+  const migrateFlatLegacy = () => {
     for (const name of fs.readdirSync(dir)) {
       if (!name.endsWith('.json') || name === CATS_FILE) continue
       const old = path.join(dir, name)
@@ -201,7 +563,7 @@ function createAgentDefStore(userDataDir) {
       if (!st.isFile()) continue
       const id = name.slice(0, -5)
       const sub = path.join(dir, id)
-      const main = path.join(sub, MAIN)
+      const main = path.join(sub, LEGACY_MAIN)
       try {
         fs.mkdirSync(sub, { recursive: true })
         fs.copyFileSync(old, main)
@@ -209,7 +571,29 @@ function createAgentDefStore(userDataDir) {
       } catch { /* 迁移失败不阻塞 */ }
     }
   }
-  migrateLegacy()
+  // 迁移二：目录内 agent.json → 自动生成同义 agent.py（原始 JSON 更名保留，不再参与加载）
+  const migrateJsonToPy = () => {
+    for (const name of fs.readdirSync(dir)) {
+      const sub = path.join(dir, name)
+      let st
+      try { st = fs.statSync(sub) } catch { continue }
+      if (!st.isDirectory()) continue
+      const legacy = path.join(sub, LEGACY_MAIN)
+      if (!fs.existsSync(legacy)) continue
+      const target = path.join(sub, MAIN)
+      if (fs.existsSync(target)) continue
+      let def = null
+      try { def = JSON.parse(fs.readFileSync(legacy, 'utf8')) } catch { def = null }
+      if (!def || typeof def !== 'object') def = { id: name, name }
+      if (!def.id) def.id = name
+      try {
+        fs.writeFileSync(target, composeAgentPy(def), 'utf8')
+        fs.renameSync(legacy, path.join(sub, LEGACY_KEEP))
+      } catch { /* 迁移失败不阻塞，回退目录仍可用 */ }
+    }
+  }
+  migrateFlatLegacy()
+  migrateJsonToPy()
 
   const mainFile = (id) => path.join(dir, String(id || ''), MAIN)
   const defDir = (id) => path.join(dir, String(id || ''))
@@ -235,28 +619,45 @@ function createAgentDefStore(userDataDir) {
     return { list: merged, map: { ...catMap } }
   }
   loadCats()
+  // 读取单个智能体目录 → 定义对象：主源 agent.py，兼容期兜底 agent.legacy.json
+  const readDefDir = (sub, dirName) => {
+    const mainP = path.join(sub, MAIN)
+    try {
+      const st = fs.statSync(mainP)
+      const src = fs.readFileSync(mainP, 'utf8')
+      return agentPyToDef(dirName, src, {
+        pyFile: MAIN,
+        dir: sub,
+        createdAt: st.birthtimeMs || 0,
+        updatedAt: st.mtimeMs || 0
+      })
+    } catch { /* 主文件缺失或解析失败 → 尝试兜底 */ }
+    try {
+      const d = JSON.parse(fs.readFileSync(path.join(sub, LEGACY_KEEP), 'utf8'))
+      if (d && typeof d === 'object' && d.id) return { ...d, form: 'legacy-json' }
+    } catch { /* 忽略 */ }
+    return null
+  }
   const list = () => {
     const items = []
     for (const name of fs.readdirSync(dir)) {
-      if (name === CATS_FILE) continue
+      if (name === CATS_FILE || name.startsWith('_') || name.startsWith('.')) continue
       const sub = path.join(dir, name)
       let st
       try { st = fs.statSync(sub) } catch { continue }
       if (!st.isDirectory()) continue
-      const main = path.join(sub, MAIN)
-      if (!fs.existsSync(main)) continue
-      try {
-        const a = JSON.parse(fs.readFileSync(main, 'utf8'))
-        items.push({
-          id: a.id,
-          name: a.name,
-          description: a.description || '',
-          category: catMap[a.id] || '未分类',
-          updatedAt: a.updatedAt || 0,
-          skillCount: Array.isArray(a.skills) ? a.skills.length : 0,
-          model: a.model || null
-        })
-      } catch { /* 忽略 */ }
+      const d = readDefDir(sub, name)
+      if (!d) continue
+      items.push({
+        id: d.id,
+        name: d.name,
+        description: d.description || '',
+        category: catMap[d.id] || catMap[name] || '未分类',
+        updatedAt: d.updatedAt || 0,
+        skillCount: Array.isArray(d.skills) ? d.skills.length : 0,
+        model: d.model || null,
+        form: d.form || 'py'
+      })
     }
     return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   }
@@ -279,10 +680,8 @@ function createAgentDefStore(userDataDir) {
   return {
     list,
     get(id) {
-      try {
-        const d = JSON.parse(fs.readFileSync(mainFile(id), 'utf8'))
-        return d && typeof d === 'object' ? d : null
-      } catch { return null }
+      if (!id) return null
+      return readDefDir(defDir(id), String(id))
     },
     create() {
       const now = Date.now()
@@ -294,24 +693,29 @@ function createAgentDefStore(userDataDir) {
         systemPrompt: '',
         skills: [],
         tools: [],
-        createdAt: now,
-        updatedAt: now
+        memories: [],
+        createdAt: now
       }
       fs.mkdirSync(defDir(def.id), { recursive: true })
-      fs.writeFileSync(mainFile(def.id), JSON.stringify(def, null, 2), 'utf8')
-      return def
+      fs.writeFileSync(mainFile(def.id), composeAgentPy(def), 'utf8')
+      return this.get(def.id)
     },
     save(def) {
       if (!def || !def.id) throw new Error('智能体缺少 id')
-      def.updatedAt = Date.now()
-      fs.mkdirSync(defDir(def.id), { recursive: true })
-      fs.writeFileSync(mainFile(def.id), JSON.stringify(def, null, 2), 'utf8')
-      return def
+      const p = mainFile(def.id)
+      fs.mkdirSync(path.dirname(p), { recursive: true })
+      const input = sanitizeAgentPyInput(def)
+      if (fs.existsSync(p)) {
+        fs.writeFileSync(p, upsertAgentPyHeader(fs.readFileSync(p, 'utf8'), input), 'utf8')
+      } else {
+        fs.writeFileSync(p, composeAgentPy({ ...input, id: def.id }), 'utf8')
+      }
+      return this.get(def.id)
     },
     remove(id) {
       try { fs.rmSync(defDir(id), { recursive: true, force: true }) } catch { /* 忽略 */ }
     },
-    // ---- 文件工作台（多文件编辑）：主文件 agent.json 不可改名/删除 ----
+    // ---- 文件工作台（多文件编辑）：主文件 agent.py 不可改名/删除 ----
     listFiles(id) {
       const d = defDir(id)
       if (!d || !fs.existsSync(d)) return []
@@ -342,13 +746,7 @@ function createAgentDefStore(userDataDir) {
       if (!p) throw new Error('路径越界')
       fs.mkdirSync(path.dirname(p), { recursive: true })
       fs.writeFileSync(p, String(content == null ? '' : content), 'utf8')
-      // 写主文件后刷新 updatedAt
-      if (rel === MAIN) {
-        try {
-          const def = JSON.parse(fs.readFileSync(p, 'utf8'))
-          if (def && def.id) this.save(def)
-        } catch { /* 内容可能是非法 JSON，暂不刷新 */ }
-      }
+      // agent.py 保存即生效：元数据解析与 updatedAt（mtime）都在读取时动态完成，无需额外处理
       return { rel }
     },
     createFile(id, rel, content) {
@@ -360,7 +758,7 @@ function createAgentDefStore(userDataDir) {
       return { rel }
     },
     deleteFile(id, rel) {
-      if (rel === MAIN) throw new Error('主定义文件 agent.json 不可删除')
+      if (rel === MAIN) throw new Error('主定义文件 agent.py 不可删除')
       const p = resolveIn(id, rel)
       if (!p) throw new Error('路径越界')
       if (!fs.existsSync(p)) throw new Error(`文件不存在: ${rel}`)
@@ -368,7 +766,7 @@ function createAgentDefStore(userDataDir) {
       return { ok: true }
     },
     renameFile(id, oldRel, newRel) {
-      if (oldRel === MAIN) throw new Error('主定义文件 agent.json 不可重命名')
+      if (oldRel === MAIN) throw new Error('主定义文件 agent.py 不可重命名')
       const src = resolveIn(id, oldRel)
       if (!src) throw new Error('路径越界')
       if (!fs.existsSync(src)) throw new Error(`文件不存在: ${oldRel}`)
@@ -506,81 +904,6 @@ function filterWriteZones(text, writeZones) {
   return parts.join('\n\n')
 }
 
-// ---------------- A2A 安全协议（skill 间通信） ----------------
-// 每个 skill 节点可声明 protocol（在节点卡片上直接编辑）：
-//   enabled     协议开关
-//   version     协议版本（A2A/1.0）
-//   identity    本 skill 身份声明（默认取 skillId）
-//   endpoint    对外端点 URL（skill card 的 endpoint 字段，可留空）
-//   auth        { type: 'none'|'token'|'hmac', secret }  凭证处理（共享密钥）
-//   access      { allowedPeers: [], deniedPeers: [] }    访问控制（允许/拒绝的 skill id）
-//                { allowedTools: [], deniedTools: [] }   工具级访问控制（P4-1：pre-execute 拦截）
-//   audit       是否写审计日志（协议运行轨迹留痕）
-// 运行时：上游消息按协议封装（envelope），先做访问控制校验，再交 LLM；
-// 结果同样按协议输出。审计记录写到 <userData>/audit/<agentId>.jsonl。
-function normalizeProtocol(node) {
-  const p = (node && node.protocol) || {}
-  if (p.enabled === false) return null
-  const access = p.access || {}
-  return {
-    enabled: true,
-    version: p.version || 'A2A/1.0',
-    identity: String(p.identity || node.skillId || node.id || 'anonymous'),
-    endpoint: String(p.endpoint || ''),
-    auth: {
-      type: p.auth && p.auth.type ? p.auth.type : 'none',
-      secret: (p.auth && p.auth.secret) ? String(p.auth.secret) : ''
-    },
-    access: {
-      allowedPeers: Array.isArray(access.allowedPeers) ? access.allowedPeers.map(String) : [],
-      deniedPeers: Array.isArray(access.deniedPeers) ? access.deniedPeers.map(String) : [],
-      allowedTools: Array.isArray(access.allowedTools) ? access.allowedTools.map(String) : [],
-      deniedTools: Array.isArray(access.deniedTools) ? access.deniedTools.map(String) : []
-    },
-    audit: p.audit !== false
-  }
-}
-
-// 节点身份（用于访问控制匹配）：skill=skillId，输入/输出/记忆/总线=节点类型:节点id
-function nodeIdentity(node) {
-  if (!node) return 'unknown'
-  if (node.type === 'skill') return String(node.skillId || '')
-  return `${node.type}:${node.id}`
-}
-
-// A2A 信封：把一条上游消息封装为协议消息（含 from / ver / ts）
-function a2aEnvelope(proto, fromId, text) {
-  const ts = new Date().toISOString()
-  return `[[A2A ${proto.version} from=${fromId} to=${proto.identity} ts=${ts}]]\n${text}\n[[/A2A]]`
-}
-
-// 协议访问控制：返回 {ok, reason}；upstreamNodes = 直接上游节点（含其输出文本）
-function checkA2AAccess(proto, upstreamNodes) {
-  const allowed = proto.access.allowedPeers.filter(Boolean)
-  const denied = proto.access.deniedPeers.filter(Boolean)
-  for (const u of upstreamNodes) {
-    const id = nodeIdentity(u.node)
-    if (!id) continue
-    if (denied.includes(id) || denied.includes(u.node && u.node.skillId)) {
-      return { ok: false, reason: `上游 ${id} 被该 skill 的 A2A 协议拒绝（deniedPeers）` }
-    }
-    if (allowed.length && !allowed.includes(id) && !allowed.includes(u.node && u.node.skillId)) {
-      return { ok: false, reason: `上游 ${id} 不在该 skill 的 A2A 协议允许名单（allowedPeers: ${allowed.join(',')}）` }
-    }
-  }
-  return { ok: true }
-}
-
-// 审计：追加一条协议运行记录
-function a2aAudit(auditDir, agentId, entry) {
-  if (!auditDir || !entry) return
-  try {
-    fs.mkdirSync(auditDir, { recursive: true })
-    const fp = path.join(auditDir, `${String(agentId || 'agent')}.jsonl`)
-    fs.appendFileSync(fp, JSON.stringify({ ts: Date.now(), ...entry }) + '\n', 'utf8')
-  } catch { /* 审计失败不阻塞运行 */ }
-}
-
 
 // ---------------- 编排 ----------------
 // 分支条件求值（边 when 表达式）：always / length > N / contains 关键词 / not contains；未知条件默认放行
@@ -683,7 +1006,6 @@ async function runAgentInner(opts) {
   const stack = opts.stack
   const nodes = opts.nodes
   const edges = opts.edges
-  const auditDir = opts.auditDir || null
   const onStatus = opts.onStatus || (() => {})
   const onOutput = opts.onOutput || (() => {})
   const onToken = opts.onToken || (() => {})
@@ -716,7 +1038,7 @@ async function runAgentInner(opts) {
     // 节点级工具/记忆链接（技能已并入 skill，不再有独立技能链接）
     const nodeToolsRaw = Array.isArray(node.tools) ? node.tools : []
     const nodeMemoriesRaw = Array.isArray(node.memories) ? node.memories : []
-    // 上游输出（连同来源节点，供 A2A 协议做访问控制）；回调边不参与普通上游；分支边按 when 条件过滤
+    // 上游输出（连同来源节点）；回调边不参与普通上游；分支边按 when 条件过滤
     const upstreamNodes = edges.filter((e) => e.to === nodeId && !e.pointId && e.type !== 'callback' && evalCond(e.when, outputs.get(e.from)))
       .map((e) => ({ node: byId.get(e.from), text: outputs.get(e.from) }))
       .filter((u) => (u.node || u.feedback) && u.text != null && u.text !== '')
@@ -775,9 +1097,55 @@ async function runAgentInner(opts) {
         return
       }
       let sub = agentStore.get(subId)
-      // 工作流中没有 → 尝试智能体定义（data/agent-defs，单智能体转最小图）
+      // 工作流中没有 → 尝试智能体定义库：
+      //   agent.py 自包含形态 → 子进程独立运行（自己调 LLM、自己执行工具）
+      //   legacy JSON 残留    → 转最小图执行（defToGraph）
       if (!sub && typeof agentStore.getDef === 'function') {
         const def = agentStore.getDef(subId)
+        if (def && def.form === 'py' && def.dir) {
+          const inputUp = upstream.join('\n\n')
+          const nTools = (Array.isArray(node.tools) ? node.tools : [])
+            .concat(edges.filter((e) => e.to === nodeId).map((e) => e.from).filter((f) => capabilities[f]).map((f) => capabilities[f]))
+            .filter(Boolean)
+          const nMems = Array.isArray(node.memories) ? node.memories : []
+          const nm = node.model
+          const injectModel = nm && nm.inherit === false
+            ? { baseUrl: nm.baseUrl || '', apiKey: nm.apiKey || '', model: nm.model || '' }
+            : null
+          onStatus({ runId, nodeId, status: 'running' })
+          try {
+            const r = await runAgentPy({
+              agentPy: path.join(def.dir, def.pyFile || 'agent.py'),
+              inputText: inputUp,
+              inject: {
+                tools: nTools,
+                memories: nMems,
+                model: injectModel,
+                parentRunId: runId
+              },
+              signal,
+              dataDir: opts.dataDir,
+              onOutput: (text) => onOutput({ runId, nodeId, output: text }),
+              onEvent: () => {}
+            })
+            if (r.ok) {
+              outputs.set(nodeId, r.result)
+              onOutput({ runId, nodeId, output: r.result })
+              onStatus({ runId, nodeId, status: 'done' })
+            } else if (r.aborted) {
+              outputs.set(nodeId, '子智能体已中止')
+              onStatus({ runId, nodeId, status: 'aborted' })
+            } else {
+              const msg = `子智能体运行失败: ${r.error || '未知错误'}`
+              outputs.set(nodeId, msg)
+              onStatus({ runId, nodeId, status: 'error', error: r.error || '未知错误' })
+            }
+          } catch (e) {
+            if (signal && signal.aborted) onStatus({ runId, nodeId, status: 'aborted' })
+            else onStatus({ runId, nodeId, status: 'error', error: e.message || String(e) })
+          }
+          return
+        }
         if (def) sub = defToGraph(def)
       }
       if (!sub) {
@@ -954,42 +1322,6 @@ async function runAgentInner(opts) {
       return
     }
 
-    // 协议节点：skill 间通信网关——加载协议 → 访问控制 → [[A2A]] 信封 → 审计
-    if (node.type === 'protocol') {
-      if (!node.protocolId) {
-        onStatus({ runId, nodeId, status: 'error', error: '协议节点未选择协议' })
-        outputs.set(nodeId, '[协议节点] 未选择协议')
-        return
-      }
-      const protoData = protocols.get(node.protocolId)
-      if (!protoData) {
-        onStatus({ runId, nodeId, status: 'error', error: `协议不存在: ${node.protocolId}` })
-        outputs.set(nodeId, `[协议节点] 协议不存在: ${node.protocolId}`)
-        return
-      }
-      const proto = normalizeProtocol({ ...node, protocol: protoData })
-      if (!proto) {
-        // 协议停用：透明放行
-        outputs.set(nodeId, upstream.join('\n\n'))
-        onStatus({ runId, nodeId, status: 'done' })
-        return
-      }
-      const acc = checkA2AAccess(proto, upstreamNodes)
-      if (!acc.ok) {
-        a2aAudit(auditDir, agent.id, { event: 'access-denied', gateway: nodeId, protocol: node.protocolId, identity: proto.identity, version: proto.version, reason: acc.reason })
-        onStatus({ runId, nodeId, status: 'error', error: acc.reason })
-        outputs.set(nodeId, `[A2A 协议拦截] ${acc.reason}`)
-        return
-      }
-      const envParts = upstreamNodes
-        .map((u) => a2aEnvelope(proto, nodeIdentity(u.node), u.text))
-        .filter((v) => v && v.trim())
-      outputs.set(nodeId, envParts.join('\n\n'))
-      onStatus({ runId, nodeId, status: 'done' })
-      a2aAudit(auditDir, agent.id, { event: 'message', gateway: nodeId, protocol: node.protocolId, identity: proto.identity, version: proto.version, from: upstreamNodes.map((u) => nodeIdentity(u.node)) })
-      return
-    }
-
     // 通信总线节点（外部挂接式）：数据从左到右，外部节点（技能/记忆）拖线挂到连接点（points）上按序处理
     if (node.type === 'bus') {
       const points = [...(node.points || [])].sort((a, b) => (a.x || 0) - (b.x || 0))
@@ -1117,36 +1449,6 @@ async function runAgentInner(opts) {
         onStatus({ runId, nodeId, status: 'error', error: `skill 不存在: ${node.skillId}` })
         return
       }
-      // A2A 安全协议：访问控制 + 消息封装 + 审计
-      const proto = normalizeProtocol(node)
-      let protocolParts = []
-      if (proto) {
-        const acc = checkA2AAccess(proto, upstreamNodes)
-        if (!acc.ok) {
-          const err = `A2A 协议拦截（${node.label || node.id}）: ${acc.reason}`
-          onStatus({ runId, nodeId, status: 'error', error: err })
-          a2aAudit(auditDir, agent.id, {
-            event: 'access-denied', nodeId, skill: node.skillId,
-            identity: proto.identity, version: proto.version, reason: acc.reason
-          })
-          outputs.set(nodeId, `[A2A 协议拦截] ${acc.reason}`)
-          return
-        }
-        // 协议已通过：向上游消息加 A2A 信封，并注入协议说明
-        for (const u of upstreamNodes) {
-          u.enveloped = a2aEnvelope(proto, nodeIdentity(u.node), u.text)
-        }
-        protocolParts.push(
-          `你已接入 A2A 安全协议（${proto.version}）。本 skill 身份：${proto.identity}${proto.endpoint ? `，对外端点：${proto.endpoint}` : ''}。` +
-          `上游消息按协议封装为 [[A2A ...]] 信封（含来源身份与时间戳），来源须在允许名单内（已校验通过）。` +
-          `回复时如有需要可同样用 [[A2A ${proto.version} from=${proto.identity} to=下游 ts=时间]] 标记结构化回传。`
-        )
-        a2aAudit(auditDir, agent.id, {
-          event: 'message', nodeId, skill: node.skillId,
-          identity: proto.identity, version: proto.version,
-          from: upstreamNodes.map((u) => nodeIdentity(u.node)), auth: proto.auth.type
-        })
-      }
       // 节点级工具：内嵌（旧数据兼容）+ 连入的工具节点工具（工具节点化后主要来源）
       const inToolIds = edges.filter((e) => e.to === nodeId).map((e) => e.from).filter((f) => capabilities[f])
       const skillOverride = {
@@ -1195,9 +1497,8 @@ async function runAgentInner(opts) {
       if (readZones.length) {
         parts.push(`你被授权的可读区域：${readZones.join('、')}。输出时可用 [[区域名]] ... [[/区域名]] 标记内容，供下游按权限读取。`)
       }
-      parts.push(...protocolParts)
       const filtered = upstreamNodes
-        .map((u) => (proto ? (u.enveloped || u.text) : filterReadZones(u.text, readZones)))
+        .map((u) => filterReadZones(u.text, readZones))
         .filter((v) => v && v.trim())
       parts.push(...filtered)
       if (!parts.length) parts.push('（无上游输入，请补充输入或连线）')
@@ -1206,20 +1507,12 @@ async function runAgentInner(opts) {
       onStatus({ runId, nodeId, status: 'running' })
       try {
         const session = { id: `ag-${agent.id}-${nodeId}-${runId}`, messages: [] }
-        // P4-1 工具管道上下文：记忆绑定 + A2A 协议工具级访问控制（pre-execute 拦截）+ 审计溯源
+        // 工具管道上下文：记忆绑定 + 审计溯源
         const pipeCtx = {}
         if (memFiles.length) pipeCtx.memoryFiles = memFiles
-        if (proto) {
-          pipeCtx.protocol = {
-            identity: proto.identity,
-            version: proto.version,
-            allowedTools: proto.access.allowedTools,
-            deniedTools: proto.access.deniedTools
-          }
-          pipeCtx.agentId = agent.id
-          pipeCtx.nodeId = nodeId
-          pipeCtx.skillId = node.skillId
-        }
+        pipeCtx.agentId = agent.id
+        pipeCtx.nodeId = nodeId
+        pipeCtx.skillId = node.skillId
         const result = await chat.runChat({
           skillId: node.skillId,
           skillOverride,
@@ -1238,12 +1531,6 @@ async function runAgentInner(opts) {
         outputs.set(nodeId, out)
         onOutput({ runId, nodeId, output: out })
         onStatus({ runId, nodeId, status: 'done' })
-        if (proto) {
-          a2aAudit(auditDir, agent.id, {
-            event: 'response', nodeId, skill: node.skillId,
-            identity: proto.identity, version: proto.version, bytes: out.length
-          })
-        }
       } catch (e) {
         if (signal && signal.aborted) {
           onStatus({ runId, nodeId, status: 'aborted' })
@@ -1297,4 +1584,4 @@ async function runAgentInner(opts) {
   return { runId, result: finals.join('\n\n---\n\n'), outputs: Object.fromEntries(outputs) }
 }
 
-module.exports = { createAgentStore, createAgentDefStore, defToGraph, runAgent, sanitizeAgent }
+module.exports = { createAgentStore, createAgentDefStore, defToGraph, runAgent, runAgentPy, sanitizeAgent, sanitizeAgentPySource }

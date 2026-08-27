@@ -349,14 +349,9 @@
   background: rgba(111, 155, 255, 0.14);
   border-color: rgba(111, 155, 255, 0.38);
 }
-/* 记忆画布：节点选中/连线同靛紫；协议启用态靛紫渐变 */
+/* 记忆画布：节点选中/连线同靛紫 */
 .mem-canvas-node.link-src {
   box-shadow: 0 0 0 1px var(--violet), 0 0 12px rgba(111, 155, 255, 0.35);
-}
-.mem-proto-btn.on {
-  background: var(--grad-soft);
-  border-color: rgba(111, 155, 255, 0.5);
-  color: var(--violet);
 }
 
 /* ================= ⑦ 输入聚焦：靛紫光环 ================= */

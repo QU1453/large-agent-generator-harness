@@ -146,18 +146,6 @@ contextBridge.exposeInMainWorld('harness', {
     run: (opts) => ipcRenderer.invoke('exporter:run', opts),
     buildExe: (opts) => ipcRenderer.invoke('exporter:build-exe', opts)
   },
-  protocols: {
-    list: () => ipcRenderer.invoke('protocols:list'),
-    create: (name) => ipcRenderer.invoke('protocols:create', name),
-    read: (name) => ipcRenderer.invoke('protocols:read', name),
-    write: (name, content) => ipcRenderer.invoke('protocols:write', name, content),
-    run: (name) => ipcRenderer.invoke('protocols:run', name),
-    delete: (name) => ipcRenderer.invoke('protocols:delete', name),
-    categories: () => ipcRenderer.invoke('protocols:categories'),
-    addCategory: (name) => ipcRenderer.invoke('protocols:add-category', name),
-    setCategory: (protoName, name) => ipcRenderer.invoke('protocols:set-category', protoName, name),
-    removeCategory: (name) => ipcRenderer.invoke('protocols:remove-category', name)
-  },
   memory: {
     list: () => ipcRenderer.invoke('memory:list'),
     create: (name, content) => ipcRenderer.invoke('memory:create', name, content),

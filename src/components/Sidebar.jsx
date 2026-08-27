@@ -52,12 +52,6 @@ const Icons = {
       <path d="M10 3.2v3M14 3.2v3" />
     </svg>
   ),
-  protocol: (
-    <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2.5 4.5 5.5v6c0 4.5 3.2 8 7.5 10 4.3-2 7.5-5.5 7.5-10v-6z" />
-      <path d="M9 12l2.2 2.2L15.5 9.5" />
-    </svg>
-  ),
   flow: (
     <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="7" height="6" rx="1.5" />
@@ -97,7 +91,6 @@ const NAV = [
   { key: 'chat', label: '会话', icon: Icons.chat },
   { key: 'workflows', label: '工作流', icon: Icons.flow },
   { key: 'agents', label: '智能体', icon: Icons.bot },
-  { key: 'protocols', label: '协议', icon: Icons.protocol },
   { key: 'skills', label: '技能', icon: Icons.skills },
   { key: 'memory', label: '记忆', icon: Icons.memory },
   { key: 'toolPacks', label: '工具包', icon: Icons.mcp },

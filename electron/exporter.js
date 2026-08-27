@@ -163,22 +163,6 @@ async function checkAgent(ag, skillList, mcpKindMap, agentStore) {
       for (const mname of node.memories || []) {
         if (!memory.get(mname)) warnings.push(`智能体节点「${node.label || node.id}」链接的记忆架构「${mname}」不存在，运行时会动态创建空记忆`)
       }
-      // A2A 安全协议校验：访问控制名单引用不存在的技能 → 警告
-      const proto = node.protocol
-      if (proto && proto.enabled !== false) {
-        const peerIds = new Set([
-          ...(proto.access && Array.isArray(proto.access.allowedPeers) ? proto.access.allowedPeers : []),
-          ...(proto.access && Array.isArray(proto.access.deniedPeers) ? proto.access.deniedPeers : [])
-        ])
-        for (const pid of peerIds) {
-          if (!pid) continue
-          const isSkill = skillList.some((a) => a.id === pid)
-          const isNode = (ag.nodes || []).some((n) => n.id === pid || (n.type === 'skill' && n.skillId === pid))
-          if (!isSkill && !isNode) {
-            warnings.push(`智能体节点「${node.label || node.id}」的 A2A 协议访问名单引用了不存在的技能/节点: ${pid}（运行时该来源将被拦截）`)
-          }
-        }
-      }
     }
   }
   walk(ag.nodes || [])
@@ -235,14 +219,26 @@ async function buildManifest(ag, skillList, opts) {
   const collectSubs = (nodes) => {
     for (const n of nodes || []) {
       if (n.type === 'subagent' && n.subagentId) {
-        let sub = opts.store && opts.store.get(n.subagentId)
-        // 工作流中没有 → 智能体定义（data/agent-defs，单智能体转最小图）
-        if (!sub && opts.store && typeof opts.store.getDef === 'function') {
-          const def = opts.store.getDef(n.subagentId)
-          if (def) sub = agent.defToGraph(def)
-        }
+        // 工作流优先（须形如 graph；防误传 def-store 时命中非图结构对象）
+        const hit = opts.store ? opts.store.get(n.subagentId) : null
+        let sub = (hit && Array.isArray(hit.nodes)) ? hit : null
+        // 工作流中没有 → 智能体定义（data/agent-defs）
+        const def = !sub && opts.store && typeof opts.store.getDef === 'function'
+          ? opts.store.getDef(n.subagentId) : null
+        // 自包含智能体（agent.py 形态）：manifest 记形态标记由运行时子进程执行；
+        // 工具/记忆引用照旧展开收集（驱动 copyPyTools 与记忆复制），最终输出时剥离图结构
+        const isPy = !!(def && def.form === 'py' && def.dir)
+        if (!sub && def) sub = agent.defToGraph(def)
         if (sub) {
-          subAgents[n.subagentId] = { id: sub.id, name: sub.name, nodes: sub.nodes || [], edges: sub.edges || [] }
+          subAgents[n.subagentId] = {
+            id: sub.id || n.subagentId,
+            name: sub.name || n.label || n.subagentId,
+            description: sub.description || '',
+            form: isPy ? 'py' : undefined,
+            pyFile: isPy ? 'agent.py' : undefined,
+            __pySrcDir: isPy ? def.dir : null,
+            nodes: sub.nodes || [], edges: sub.edges || []
+          }
           collectSkills(sub.nodes || [])
           collectSubs(sub.nodes || [])
         }
@@ -280,7 +276,14 @@ async function buildManifest(ag, skillList, opts) {
     skills: skillsOut,
     tools: [...new Set(skillsOut.flatMap((a) => (a.tools || []).filter((t) => t.startsWith('tool:') || t.startsWith('mcp:')).map((t) => t.slice(t.indexOf(':') + 1))))],
     agent: { nodes: sanitizeNodeModels(ag.nodes), edges: ag.edges },
-    subAgents: Object.fromEntries(Object.entries(subAgents).map(([k, sub]) => [k, { ...sub, nodes: sanitizeNodeModels(sub.nodes) }])),
+    subAgents: Object.fromEntries(Object.entries(subAgents).map(([k, sub]) => {
+      if (sub.form === 'py') {
+        // 自包含智能体：只保留形态标记（agent.py 才是唯一事实来源），剥离源目录等宿主内幕
+        const { __pySrcDir, form, pyFile, id, name, description } = sub
+        return [k, { id, name, description, form, pyFile, nodes: [], edges: [] }]
+      }
+      return [k, { ...sub, nodes: sanitizeNodeModels(sub.nodes) }]
+    })),
     createdAt: Date.now()
   }
 }
@@ -329,6 +332,39 @@ async function copyPyTools(manifest, ag, outToolsDir) {
     if (file && meta && meta.kind === 'py' && /\.(tool|mcp)\.py$/.test(file)) {
       fs.copyFileSync(file, path.join(outToolsDir, path.basename(file)))
       copied.push(path.basename(file))
+    }
+  }
+  return copied
+}
+
+// 复制被引用的自包含智能体（agent.py 形态）到导出包：
+//   agents/<id>/agent.py    元数据区模型配置已清洗为 env: 占位符
+//   agents/_runtime/harness_rt.py   共享运行时（agent.py 引导头按 ../_runtime 相对路径导入）
+function copyPyAgents(manifest, store, outAgentsDir) {
+  const entries = Object.entries(manifest.subAgents || {}).filter(([, s]) => s && s.form === 'py')
+  const copied = []
+  let runtimeDone = false
+  for (const [id] of entries) {
+    if (!store || typeof store.getDef !== 'function') break
+    const def = store.getDef(id)
+    if (!def || !def.dir) continue
+    let src
+    try {
+      src = fs.readFileSync(path.join(def.dir, def.pyFile || 'agent.py'), 'utf8')
+    } catch {
+      continue // 源文件缺失（checkAgent 阶段已对不存在的智能体报错）
+    }
+    fs.mkdirSync(path.join(outAgentsDir, id), { recursive: true })
+    fs.writeFileSync(path.join(outAgentsDir, id, 'agent.py'), agent.sanitizeAgentPySource(src), 'utf8')
+    copied.push(`agents/${id}/agent.py`)
+    if (!runtimeDone) {
+      const rtSrc = path.join(path.dirname(def.dir), '_runtime', 'harness_rt.py')
+      if (fs.existsSync(rtSrc)) {
+        fs.mkdirSync(path.join(outAgentsDir, '_runtime'), { recursive: true })
+        fs.copyFileSync(rtSrc, path.join(outAgentsDir, '_runtime', 'harness_rt.py'))
+        copied.push('agents/_runtime/harness_rt.py')
+      }
+      runtimeDone = true
     }
   }
   return copied
@@ -385,6 +421,10 @@ async function exportAgent(opts) {
   fs.mkdirSync(toolsDir, { recursive: true })
   const copiedTools = await copyPyTools(manifest, ag, toolsDir)
   if (copiedTools.length) written.push('tools/')
+
+  // 4b. 自包含智能体复制（子智能体节点引用的 agent.py 形态 + 共享运行时）
+  const copiedAgents = copyPyAgents(manifest, opts.store, path.join(outDir, 'agents'))
+  if (copiedAgents.length) written.push('agents/')
 
   // 5. 内嵌 Python 运行时（复用 Harness 运行时）
   const src = runtimeSource()

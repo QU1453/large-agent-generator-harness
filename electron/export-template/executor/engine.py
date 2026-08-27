@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 
 from . import llm
@@ -180,6 +182,56 @@ def _node_tool_agent(manifest, node, config, registry, message):
         eff_agent['tools'] = list(dict.fromkeys(list(agent.get('tools') or []) + node_tools))
     return run_agent(eff_agent, resolve_node_config(manifest, node, config), message, registry, None)
 
+PY_SUB_TIMEOUT = 900
+
+def run_py_subagent(sub_id, message, config):
+    # 自包含智能体（manifest.subAgents[].form == 'py'）：agents/<id>/agent.py 子进程独立运行，
+    # 自行调用 LLM（经 harness_rt 引导）；引擎只负责投喂输入 + 收集 NDJSON 结果。
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = os.path.join(here, 'agents', sub_id, 'agent.py')
+    if not os.path.isfile(script):
+        return '(自包含智能体文件缺失: %s)' % sub_id
+    payload = {'input': str(message or ''), 'inject': {'model': {
+        'baseUrl': config.get('base_url') or '',
+        'apiKey': config.get('api_key') or '',
+        'model': config.get('model') or ''
+    }}}
+    env = dict(os.environ)
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['AI_HARNESS_DATA'] = here                  # ToolBox 扫描 <包根>/tool-packs、<包根>/memory
+    env.setdefault('AIH_AGENT_TOOL_DIRS', here)    # 追加扫描 <包根>/tools（copyPyTools 落盘处）
+    try:
+        p = subprocess.run(
+            [sys.executable, '-X', 'utf8', script],
+            input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=PY_SUB_TIMEOUT, env=env)
+    except subprocess.TimeoutExpired:
+        return '(自包含智能体执行超时: %s)' % sub_id
+    except Exception as e:
+        return '(自包含智能体启动失败: %s: %s)' % (sub_id, e)
+    final = None
+    errs = []
+    for line in p.stdout.decode('utf-8', 'replace').splitlines():
+        line = line.strip()
+        if not line.startswith('{'):
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        t = obj.get('type')
+        if t == 'result':
+            final = str(obj.get('text') or '')
+        elif t == 'error':
+            errs.append(str(obj.get('error') or ''))
+    if final is not None:
+        return (final + '\n\n' + '\n'.join(errs)) if errs else final
+    if not errs and p.returncode:
+        tail = [l for l in p.stderr.decode('utf-8', 'replace').strip().splitlines() if l]
+        errs.append(tail[-1] if tail else ('退出码 %s' % p.returncode))
+    return '\n'.join(errs) if errs else '(自包含智能体无输出: %s)' % sub_id
+
 def run_graph(manifest, nodes, edges, config, user_message, registry, stack):
     # 单次图执行：返回 {'outputs': {...}, 'finals': [...]}；子智能体节点递归调用
     # 捕获输出节点 id（带工具的输出节点会临时伪装成 skill，不能用 type 判断）
@@ -227,14 +279,19 @@ def run_graph(manifest, nodes, edges, config, user_message, registry, stack):
                 continue
             sub = (manifest.get('subAgents') or {}).get(sub_id)
             if not sub:
-                outputs[node_id] = '（子智能体不存在: %s）' % sub_id
+                outputs[node_id] = '(子智能体不存在: %s)' % sub_id
                 continue
             stack.add(sub_id)
             try:
-                sub_res = run_graph(manifest, sub.get('nodes') or [], sub.get('edges') or [], resolve_node_config(manifest, node, config), '\n\n'.join(upstream), registry, stack)
+                node_cfg = resolve_node_config(manifest, node, config)
+                if sub.get('form') == 'py':
+                    # 自包含智能体：子进程独立执行（自己调 LLM），不进入本进程图编排
+                    outputs[node_id] = run_py_subagent(sub_id, '\n\n'.join(upstream), node_cfg)
+                else:
+                    sub_res = run_graph(manifest, sub.get('nodes') or [], sub.get('edges') or [], node_cfg, '\n\n'.join(upstream), registry, stack)
+                    outputs[node_id] = '\n\n---\n\n'.join(sub_res['finals'])
             finally:
                 stack.discard(sub_id)
-            outputs[node_id] = '\n\n---\n\n'.join(sub_res['finals'])
         elif node.get('type') == 'flow':
             # 控制流：汇聚（合并上游）/ 分支（透传，分流由下游边 when 条件过滤）/ 循环（输入重复 N 次）
             ft = node.get('flowType') or 'merge'

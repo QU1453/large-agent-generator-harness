@@ -51,28 +51,12 @@ function installAudit(dir) {
         sessionId: ctx.sessionId || undefined,
         agentId: ctx.agentId || undefined,
         nodeId: ctx.nodeId || undefined,
-        skillId: ctx.skillId || undefined,
-        protocol: ctx.protocol ? ctx.protocol.identity : undefined
+        skillId: ctx.skillId || undefined
       }
       fs.appendFileSync(path.join(auditDir, 'tools.jsonl'), JSON.stringify(record) + '\n', 'utf8')
     } catch { /* 审计失败不阻塞工具执行 */ }
   })
 }
-
-// A2A 访问控制消费者（默认安装）：协议声明了 allowedTools/deniedTools 时，工具调用在 pre-execute 被拦截
-hook('pre-execute', (info) => {
-  const proto = info.ctx && info.ctx.protocol
-  if (!proto) return undefined
-  const denied = proto.deniedTools || []
-  const allowed = proto.allowedTools || []
-  if (denied.includes(info.name)) {
-    return { allow: false, reason: `工具 ${info.name} 被协议「${proto.identity}」拒绝（deniedTools）` }
-  }
-  if (allowed.length && !allowed.includes(info.name)) {
-    return { allow: false, reason: `工具 ${info.name} 不在协议「${proto.identity}」允许名单（allowedTools: ${allowed.join(',')}）` }
-  }
-  return undefined
-})
 
 // 记忆消费者（默认安装）：节点绑定了记忆架构时，工具调用自动记入该记忆空间的 ledger 账本（溯源）
 // 跳过 memory_* 工具（它们自身已写账本），避免重复记录

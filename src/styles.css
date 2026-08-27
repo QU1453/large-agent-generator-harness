@@ -1762,10 +1762,9 @@ code { font-family: var(--mono); }
 }
 .editor-dirty { font-size: 11px; color: var(--warning); animation: msg-in 0.2s ease; }
 
-/* 协议 / 工具代码编辑器内的「运行 & 调试」面板 */
+/* 工具代码编辑器内的「运行 & 调试」面板 */
 .editor-run { border-top: 1px solid var(--border); padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
 .editor-run-bar { display: flex; align-items: center; gap: 10px; }
-.editor-run-hint { font-size: 11.5px; color: var(--text-3); }
 .editor-test { display: flex; gap: 8px; align-items: stretch; }
 .editor-test-sel { flex: 0 0 220px; }
 .editor-test-args { flex: 1; min-height: 34px; font-family: var(--mono); font-size: 12px; resize: vertical; }
@@ -2397,28 +2396,6 @@ code { font-family: var(--mono); }
 .wf-bus-port.top { top: -5px; }
 .wf-bus-port.bottom { bottom: -5px; }
 .wf-bus-port:hover { transform: translateX(-50%) scale(1.35); box-shadow: 0 0 8px rgba(139, 124, 246, 0.8); }
-.wf-proto-btn {
-  width: 100%;
-  background: var(--bg-0);
-  border: 1px dashed var(--border-2);
-  border-radius: var(--radius-s);
-  padding: 5px 9px;
-  font-size: 11.5px;
-  color: var(--text-2);
-  cursor: pointer;
-  text-align: center;
-}
-.wf-proto-btn:hover { border-color: var(--violet); color: var(--violet); }
-.wf-proto-btn.on { border-color: rgba(124, 92, 246, 0.6); color: var(--violet); background: rgba(124, 92, 246, 0.12); }
-.wf-proto-modal { width: 520px; max-width: 92vw; }
-.wf-proto-body { max-height: 66vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-.wf-proto-auth { display: flex; gap: 8px; }
-.wf-proto-auth select { flex: 1 1 40%; }
-.wf-proto-auth input { flex: 1 1 60%; }
-.proto-on-badge {
-  font-size: 11px; font-weight: 600; color: var(--violet);
-  border: 1px solid var(--violet); border-radius: 20px; padding: 1px 9px;
-}
 /* 节点级工具/技能链接 */
 .wf-links { display: flex; gap: 6px; margin-top: 2px; }
 .wf-link-btn {
@@ -2931,12 +2908,6 @@ code { font-family: var(--mono); }
 .mem-agent-select, .mem-tool-select { max-width: 100%; }
 .mem-agent-select .search-select-cur, .mem-tool-select .search-select-cur { width: 100%; font-size: 11.5px; padding: 3px 6px; }
 .mem-node-row { display: flex; gap: 6px; align-items: center; }
-.mem-proto-btn, .mem-node-tool {
-  background: var(--bg-3); border: 1px solid var(--border); color: var(--text-2);
-  font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap;
-}
-.mem-proto-btn:hover, .mem-node-tool:hover { border-color: var(--violet); color: var(--text); }
-.mem-proto-btn.on { border-color: rgba(124, 198, 90, 0.6); color: #7cc65a; }
 /* 画布运行结果弹窗 */
 .mem-run-modal { width: min(680px, 92vw); }
 .mem-run-body { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
