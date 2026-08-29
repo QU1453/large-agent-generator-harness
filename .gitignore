@@ -15,6 +15,8 @@ data/
 build-tools/
 # 测试运行数据残留
 data-test2/
+# asar 打包暂存目录
+_stage-asar/
 # Python 缓存
 __pycache__/
 *.pyc
